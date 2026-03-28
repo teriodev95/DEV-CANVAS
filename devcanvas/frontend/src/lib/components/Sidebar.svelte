@@ -14,22 +14,18 @@
 
 	let showCreateModal = $state(false);
 
-	function focusOnMount(node: HTMLElement) {
-		node.focus();
-	}
+	function focusOnMount(node: HTMLElement) { node.focus(); }
+
 	let createType = $state<'tmux' | 'pty'>('tmux');
 	let createName = $state('');
 	let creating = $state(false);
 
-	let sessionCount = $derived($sessions.length);
-
 	function getDefaultName(): string {
-		const existingNumbers = $sessions
-			.filter((s) => s.name.startsWith('dev-'))
-			.map((s) => parseInt(s.name.replace('dev-', ''), 10))
-			.filter((n) => !isNaN(n));
-		const max = existingNumbers.length > 0 ? Math.max(...existingNumbers) : 0;
-		return `dev-${max + 1}`;
+		const nums = $sessions
+			.filter(s => s.name.startsWith('dev-'))
+			.map(s => parseInt(s.name.replace('dev-', ''), 10))
+			.filter(n => !isNaN(n));
+		return `dev-${(nums.length > 0 ? Math.max(...nums) : 0) + 1}`;
 	}
 
 	function openCreateModal(type: 'tmux' | 'pty') {
@@ -43,7 +39,7 @@
 		creating = true;
 		try {
 			const session = await api.sessions.create(workspaceId, createName.trim(), createType);
-			sessions.update((s) => [...s, session]);
+			sessions.update(s => [...s, session]);
 			showCreateModal = false;
 			onAddTerminal?.(session.id, session.name, session.type);
 		} catch (err) {
@@ -56,98 +52,79 @@
 	async function deleteSession(id: string) {
 		try {
 			await api.sessions.delete(id);
-			sessions.update((s) => s.filter((sess) => sess.id !== id));
+			sessions.update(s => s.filter(sess => sess.id !== id));
 		} catch (err) {
 			console.error('Failed to delete session:', err);
 		}
 	}
-
-	function handleSessionClick(session: { id: string; name: string; type: 'tmux' | 'pty' }) {
-		onAddTerminal?.(session.id, session.name, session.type);
-	}
 </script>
 
-<!-- Sidebar -->
 <aside class="sidebar">
 
-	<!-- Header -->
-	<header class="sidebar-header">
-		<div class="section-row">
-			<span class="section-label">Sessions</span>
-			{#if sessionCount > 0}
-				<span class="count-badge">{sessionCount}</span>
+	<!-- Section header -->
+	<div class="section-head">
+		<div class="section-left">
+			<span class="section-title">Sessions</span>
+			{#if $sessions.length > 0}
+				<span class="count">{$sessions.length}</span>
 			{/if}
 		</div>
-
-		<div class="create-row">
-			<button class="create-btn create-btn--tmux" onclick={() => openCreateModal('tmux')}>
-				<svg class="create-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-					<path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-				</svg>
-				tmux
+		<div class="section-actions">
+			<button class="action-btn" onclick={() => openCreateModal('tmux')} title="New tmux session">
+				+ tmux
 			</button>
-			<button class="create-btn create-btn--pty" onclick={() => openCreateModal('pty')}>
-				<svg class="create-icon" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-					<path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-				</svg>
-				pty
+			<span class="action-sep">·</span>
+			<button class="action-btn action-btn--pty" onclick={() => openCreateModal('pty')} title="New PTY session">
+				+ pty
 			</button>
 		</div>
-	</header>
+	</div>
 
-	<!-- Sessions list -->
-	<div class="sessions-scroll">
+	<!-- Session list -->
+	<div class="list-area">
 		{#if $sessionsLoading}
-			<div class="skeleton-list">
-				{#each { length: 3 } as _}
-					<div class="skeleton-item"></div>
-				{/each}
-			</div>
+			{#each { length: 3 } as _, i}
+				<div class="skeleton" style="opacity: {1 - i * 0.2}"></div>
+			{/each}
 		{:else if $sessions.length === 0}
-			<div class="empty-state">
-				<svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-					<rect x="3" y="3" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.5"/>
-					<path d="M7 21h10M12 17v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-					<path d="M7.5 10l2 2-2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-					<path d="M12.5 14h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+			<div class="empty">
+				<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+					<rect x="2" y="2" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/>
+					<path d="M6 18h8M10 14v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+					<path d="M5 8l3 2-3 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>
-				<p class="empty-title">No sessions yet</p>
-				<p class="empty-sub">Use + tmux or + pty to start</p>
+				<span>No sessions</span>
 			</div>
 		{:else}
-			<ul class="session-list">
-				{#each $sessions as session (session.id)}
-					<li class="session-list-item">
-						<SessionItem
-							{session}
-							onclick={() => handleSessionClick(session)}
-							ondelete={() => deleteSession(session.id)}
-						/>
-					</li>
-				{/each}
-			</ul>
+			{#each $sessions as session (session.id)}
+				<SessionItem
+					{session}
+					onclick={() => onAddTerminal?.(session.id, session.name, session.type)}
+					ondelete={() => deleteSession(session.id)}
+				/>
+			{/each}
 		{/if}
 	</div>
 
 	<!-- Footer -->
-	<footer class="sidebar-footer">
-		<button class="btn-note" onclick={() => onAddNote?.()}>
-			<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" width="13" height="13">
-				<path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+	<div class="sidebar-foot">
+		<button class="foot-note" onclick={() => onAddNote?.()}>
+			<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+				<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
 			</svg>
-			Note Block
+			Note block
 		</button>
 
-		<div class="footer-row">
-			<span class="footer-label">Font size</span>
-			<div class="font-stepper">
+		<div class="foot-row">
+			<span class="foot-label">Font</span>
+			<div class="stepper">
 				<button
 					class="stepper-btn"
 					onclick={() => terminalConfig.setFontSize($terminalConfig.fontSize - 1)}
 					disabled={$terminalConfig.fontSize <= terminalConfig.MIN}
 					aria-label="Decrease font size"
 				>−</button>
-				<span class="stepper-value">{$terminalConfig.fontSize}</span>
+				<span class="stepper-val">{$terminalConfig.fontSize}</span>
 				<button
 					class="stepper-btn"
 					onclick={() => terminalConfig.setFontSize($terminalConfig.fontSize + 1)}
@@ -158,68 +135,79 @@
 		</div>
 
 		<div class="hints">
-			<span class="hint"><kbd>T</kbd> terminal</span>
-			<span class="hint"><kbd>N</kbd> note</span>
-			<span class="hint"><kbd>⌘Z</kbd> undo</span>
+			<span><kbd>T</kbd> terminal</span>
+			<span><kbd>N</kbd> note</span>
+			<span><kbd>⌘Z</kbd> undo</span>
 		</div>
-	</footer>
+	</div>
 </aside>
 
-<!-- Create Session Modal -->
+<!-- Modal -->
 {#if showCreateModal}
 	<div
-		class="modal-backdrop"
+		class="backdrop"
 		role="dialog"
 		aria-modal="true"
+		tabindex="-1"
 		onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
 		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
-		tabindex="-1"
 	>
 		<div
-			class="modal-card"
+			class="modal"
+			role="presentation"
 			onclick={(e) => e.stopPropagation()}
 			onkeydown={(e) => e.key === 'Enter' && createSession()}
-			role="presentation"
 		>
-			<div class="modal-header">
-				<h2 class="modal-title">New {createType} session</h2>
-				<p class="modal-sub">
-					{createType === 'tmux' ? 'Creates a tmux session on the server' : 'Spawns a PTY shell'}
-				</p>
+			<!-- Type toggle -->
+			<div class="modal-toggle">
+				<button
+					class="toggle-opt"
+					class:active={createType === 'tmux'}
+					onclick={() => createType = 'tmux'}
+				>tmux</button>
+				<button
+					class="toggle-opt"
+					class:active={createType === 'pty'}
+					onclick={() => createType = 'pty'}
+				>pty</button>
 			</div>
 
-			<label class="field">
-				<span class="field-label">Session name</span>
-				<input
-					class="field-input"
-					type="text"
-					bind:value={createName}
-					placeholder="dev-1"
-					use:focusOnMount
-				/>
-			</label>
+			<div class="modal-body">
+				<p class="modal-desc">
+					{createType === 'tmux'
+						? 'Creates a multiplexed tmux session on the server'
+						: 'Spawns a direct PTY shell process'}
+				</p>
 
-			<div class="modal-actions">
-				<button class="modal-btn modal-btn--cancel" onclick={() => (showCreateModal = false)}>
-					Cancel
-				</button>
+				<label class="field">
+					<span class="field-label">Name</span>
+					<input
+						class="field-input"
+						type="text"
+						bind:value={createName}
+						placeholder="dev-1"
+						use:focusOnMount
+					/>
+				</label>
+			</div>
+
+			<div class="modal-foot">
+				<button class="btn-ghost" onclick={() => showCreateModal = false}>Cancel</button>
 				<button
-					class="modal-btn modal-btn--confirm"
+					class="btn-primary"
 					onclick={createSession}
 					disabled={creating || !createName.trim()}
-				>
-					{creating ? 'Creating…' : 'Create'}
-				</button>
+				>{creating ? 'Creating…' : 'Create'}</button>
 			</div>
 		</div>
 	</div>
 {/if}
 
 <style>
-	/* ── Layout ──────────────────────────────────── */
+	/* ─── Sidebar shell ───────────────────────────────── */
 	.sidebar {
-		width: 256px;
-		min-width: 256px;
+		width: 228px;
+		min-width: 228px;
 		height: 100%;
 		background: var(--surface);
 		border-right: 1px solid var(--border);
@@ -228,226 +216,173 @@
 		overflow: hidden;
 	}
 
-	/* ── Header ──────────────────────────────────── */
-	.sidebar-header {
-		padding: 16px 16px 12px;
-		border-bottom: 1px solid var(--border);
-		display: flex;
-		flex-direction: column;
-		gap: 10px;
-	}
-
-	.section-row {
+	/* ─── Section header ──────────────────────────────── */
+	.section-head {
 		display: flex;
 		align-items: center;
-		gap: 8px;
+		justify-content: space-between;
+		padding: 0 14px;
+		height: 44px;
+		flex-shrink: 0;
+		border-bottom: 1px solid var(--border);
 	}
 
-	.section-label {
+	.section-left {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+	}
+
+	.section-title {
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 11px;
 		font-weight: 600;
 		color: var(--muted);
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
+		letter-spacing: 0.04em;
 	}
 
-	.count-badge {
+	.count {
 		font-family: var(--font-family-mono, monospace);
 		font-size: 10px;
-		font-weight: 500;
-		color: var(--muted);
-		background: var(--surface2);
-		border: 1px solid var(--border);
-		padding: 1px 7px;
-		border-radius: 20px;
+		color: var(--border);
 		font-variant-numeric: tabular-nums;
-		line-height: 1.6;
-	}
-
-	/* ── Create buttons ──────────────────────────── */
-	.create-row {
-		display: flex;
-		gap: 6px;
-	}
-
-	.create-btn {
-		flex: 1;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		gap: 5px;
-		padding: 6px 0;
-		border-radius: 6px;
-		border: 1px solid transparent;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-	}
-
-	.create-icon {
-		width: 12px;
-		height: 12px;
-		flex-shrink: 0;
-	}
-
-	.create-btn--tmux {
-		background: rgba(124, 92, 252, 0.06);
-		border-color: rgba(124, 92, 252, 0.2);
-		color: #9575ff;
-	}
-	.create-btn--tmux:hover {
-		background: rgba(124, 92, 252, 0.14);
-		border-color: rgba(124, 92, 252, 0.4);
-		color: #b09fff;
-	}
-
-	.create-btn--pty {
-		background: rgba(61, 214, 140, 0.06);
-		border-color: rgba(61, 214, 140, 0.2);
-		color: #3dd68c;
-	}
-	.create-btn--pty:hover {
-		background: rgba(61, 214, 140, 0.12);
-		border-color: rgba(61, 214, 140, 0.35);
-		color: #65e4a8;
-	}
-
-	/* ── Sessions scroll area ────────────────────── */
-	.sessions-scroll {
-		flex: 1;
-		overflow-y: auto;
-		padding: 8px;
-	}
-
-	/* Skeleton loading */
-	.skeleton-list {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-	}
-
-	.skeleton-item {
-		height: 38px;
 		background: var(--surface2);
-		border-radius: 6px;
-		animation: pulse-dot 1.5s ease-in-out infinite;
+		padding: 1px 6px;
+		border-radius: 10px;
+		border: 1px solid var(--border);
+		line-height: 1.5;
 	}
 
-	/* Empty state */
-	.empty-state {
+	.section-actions {
 		display: flex;
-		flex-direction: column;
 		align-items: center;
-		justify-content: center;
-		padding: 40px 16px;
-		gap: 6px;
-		text-align: center;
-	}
-
-	.empty-icon {
-		width: 28px;
-		height: 28px;
-		color: var(--border);
-		margin-bottom: 4px;
-	}
-
-	.empty-title {
-		margin: 0;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		font-weight: 500;
-		color: var(--muted);
-	}
-
-	.empty-sub {
-		margin: 0;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 10px;
-		color: var(--border);
-	}
-
-	/* Session list */
-	.session-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
 		gap: 2px;
 	}
 
-	.session-list-item {
-		display: contents;
+	.action-sep {
+		font-size: 10px;
+		color: var(--border);
+		user-select: none;
+		padding: 0 1px;
 	}
 
-	/* ── Footer ──────────────────────────────────── */
-	.sidebar-footer {
-		padding: 12px 16px;
-		border-top: 1px solid var(--border);
+	.action-btn {
+		background: transparent;
+		border: none;
+		font-family: var(--font-family-mono, monospace);
+		font-size: 10px;
+		color: #4a4a60;
+		cursor: pointer;
+		padding: 3px 6px;
+		border-radius: 4px;
+		transition: color 0.12s ease, background 0.12s ease;
+		letter-spacing: 0.02em;
+	}
+	.action-btn:hover {
+		color: var(--accent-hover);
+		background: rgba(124, 92, 252, 0.08);
+	}
+	.action-btn--pty:hover {
+		color: #3dd68c;
+		background: rgba(61, 214, 140, 0.08);
+	}
+
+	/* ─── Session list ────────────────────────────────── */
+	.list-area {
+		flex: 1;
+		overflow-y: auto;
+		padding: 6px;
 		display: flex;
 		flex-direction: column;
-		gap: 10px;
+		gap: 1px;
 	}
 
-	.btn-note {
+	/* Skeleton */
+	.skeleton {
+		height: 34px;
+		background: var(--surface2);
+		border-radius: 5px;
+		animation: pulse-dot 1.6s ease-in-out infinite;
+	}
+
+	/* Empty */
+	.empty {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 8px;
+		padding: 40px 0;
+		color: var(--border);
+	}
+	.empty span {
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		color: #3a3a50;
+	}
+
+	/* ─── Footer ──────────────────────────────────────── */
+	.sidebar-foot {
+		border-top: 1px solid var(--border);
+		padding: 10px 14px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 9px;
+	}
+
+	.foot-note {
 		display: flex;
 		align-items: center;
-		gap: 6px;
-		width: 100%;
-		padding: 7px 10px;
+		gap: 7px;
 		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		color: var(--muted);
+		border: none;
+		color: #3a3a50;
 		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
+		font-size: 11px;
 		font-weight: 500;
 		cursor: pointer;
-		transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+		padding: 0;
+		transition: color 0.12s ease;
+		width: fit-content;
 	}
-	.btn-note:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: rgba(124, 92, 252, 0.05);
+	.foot-note:hover {
+		color: var(--muted);
 	}
 
-	.footer-row {
+	.foot-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 	}
 
-	.footer-label {
+	.foot-label {
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 11px;
-		color: var(--muted);
+		color: #3a3a50;
 	}
 
-	/* Font stepper */
-	.font-stepper {
+	/* Stepper */
+	.stepper {
 		display: flex;
 		align-items: center;
-		background: var(--surface2);
 		border: 1px solid var(--border);
 		border-radius: 5px;
 		overflow: hidden;
+		background: var(--surface2);
 	}
 
 	.stepper-btn {
+		width: 24px;
+		height: 22px;
+		background: transparent;
+		border: none;
+		color: #4a4a60;
+		font-size: 13px;
+		cursor: pointer;
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		width: 26px;
-		height: 24px;
-		background: transparent;
-		border: none;
-		color: var(--muted);
-		font-size: 14px;
-		line-height: 1;
-		cursor: pointer;
 		font-family: var(--font-family-mono, monospace);
 		transition: background 0.1s ease, color 0.1s ease;
 	}
@@ -456,110 +391,135 @@
 		color: var(--text);
 	}
 	.stepper-btn:disabled {
-		opacity: 0.3;
+		opacity: 0.25;
 		cursor: default;
 	}
 
-	.stepper-value {
-		font-family: var(--font-family-mono, monospace);
-		font-size: 11px;
-		color: var(--text);
-		min-width: 26px;
-		height: 24px;
+	.stepper-val {
+		width: 28px;
+		height: 22px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
+		font-family: var(--font-family-mono, monospace);
+		font-size: 11px;
+		color: var(--muted);
 		border-left: 1px solid var(--border);
 		border-right: 1px solid var(--border);
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* Keyboard hints */
+	/* Hints */
 	.hints {
 		display: flex;
-		align-items: center;
-		gap: 12px;
+		gap: 10px;
 	}
-
-	.hint {
+	.hints span {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 3px;
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 10px;
 		color: var(--border);
 	}
-
 	kbd {
-		display: inline-flex;
-		align-items: center;
-		padding: 1px 5px;
+		font-family: var(--font-family-mono, monospace);
+		font-size: 9px;
 		background: var(--surface2);
 		border: 1px solid var(--border);
 		border-radius: 3px;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 9px;
-		color: var(--muted);
-		line-height: 1.6;
+		padding: 1px 4px;
+		color: #4a4a60;
+		line-height: 1.5;
 	}
 
-	/* ── Modal ───────────────────────────────────── */
-	.modal-backdrop {
+	/* ─── Modal ───────────────────────────────────────── */
+	.backdrop {
 		position: fixed;
 		inset: 0;
-		background: rgba(0, 0, 0, 0.65);
-		backdrop-filter: blur(3px);
+		background: rgba(0, 0, 0, 0.6);
+		backdrop-filter: blur(4px);
 		z-index: 1000;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 	}
 
-	.modal-card {
+	.modal {
 		background: var(--surface);
 		border: 1px solid var(--border);
 		border-radius: 12px;
-		padding: 24px;
-		width: 360px;
-		box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.04);
+		width: 340px;
+		overflow: hidden;
+		box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04);
 	}
 
-	.modal-header {
-		margin-bottom: 20px;
+	/* Type toggle */
+	.modal-toggle {
+		display: flex;
+		border-bottom: 1px solid var(--border);
 	}
 
-	.modal-title {
-		margin: 0 0 4px;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 15px;
-		font-weight: 600;
+	.toggle-opt {
+		flex: 1;
+		padding: 12px 0;
+		background: transparent;
+		border: none;
+		font-family: var(--font-family-mono, monospace);
+		font-size: 12px;
+		color: var(--muted);
+		cursor: pointer;
+		transition: color 0.12s ease, background 0.12s ease;
+		position: relative;
+	}
+	.toggle-opt:hover {
 		color: var(--text);
-		letter-spacing: -0.01em;
+		background: var(--surface2);
+	}
+	.toggle-opt.active {
+		color: var(--text);
+		background: var(--surface2);
+	}
+	.toggle-opt.active::after {
+		content: '';
+		position: absolute;
+		bottom: 0;
+		left: 16px;
+		right: 16px;
+		height: 2px;
+		background: var(--accent);
+		border-radius: 2px 2px 0 0;
+	}
+	.toggle-opt:not(:last-child) {
+		border-right: 1px solid var(--border);
 	}
 
-	.modal-sub {
-		margin: 0;
+	.modal-body {
+		padding: 20px 20px 16px;
+	}
+
+	.modal-desc {
+		margin: 0 0 16px;
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 12px;
 		color: var(--muted);
-		line-height: 1.5;
+		line-height: 1.6;
 	}
 
 	/* Field */
 	.field {
 		display: block;
-		margin-bottom: 20px;
 	}
 
 	.field-label {
 		display: block;
-		margin-bottom: 6px;
 		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 11px;
-		font-weight: 500;
-		color: var(--muted);
+		font-size: 10px;
+		font-weight: 600;
+		color: #4a4a60;
 		text-transform: uppercase;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.08em;
+		margin-bottom: 6px;
 	}
 
 	.field-input {
@@ -572,51 +532,59 @@
 		font-family: var(--font-family-mono, monospace);
 		font-size: 13px;
 		outline: none;
-		transition: border-color 0.15s ease, box-shadow 0.15s ease;
 		box-sizing: border-box;
+		transition: border-color 0.15s ease, box-shadow 0.15s ease;
 	}
 	.field-input:focus {
 		border-color: var(--accent);
-		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.15);
+		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.12);
 	}
 
-	/* Modal actions */
-	.modal-actions {
+	/* Modal footer */
+	.modal-foot {
 		display: flex;
-		gap: 8px;
+		align-items: center;
 		justify-content: flex-end;
+		gap: 8px;
+		padding: 12px 20px;
+		border-top: 1px solid var(--border);
+		background: var(--surface2);
 	}
 
-	.modal-btn {
-		padding: 8px 18px;
-		border-radius: 7px;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 13px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
-	}
-
-	.modal-btn--cancel {
+	.btn-ghost {
+		padding: 7px 16px;
 		background: transparent;
 		border: 1px solid var(--border);
+		border-radius: 6px;
 		color: var(--muted);
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, color 0.12s;
 	}
-	.modal-btn--cancel:hover {
+	.btn-ghost:hover {
 		border-color: var(--muted);
 		color: var(--text);
 	}
 
-	.modal-btn--confirm {
+	.btn-primary {
+		padding: 7px 16px;
 		background: var(--accent);
 		border: 1px solid transparent;
+		border-radius: 6px;
 		color: #fff;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: background 0.12s ease;
 	}
-	.modal-btn--confirm:hover:not(:disabled) {
+	.btn-primary:hover:not(:disabled) {
 		background: var(--accent-hover);
 	}
-	.modal-btn--confirm:disabled {
-		opacity: 0.45;
+	.btn-primary:disabled {
+		opacity: 0.4;
 		cursor: default;
 	}
 </style>
