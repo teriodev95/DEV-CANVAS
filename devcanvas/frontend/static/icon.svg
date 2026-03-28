@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#0d0d0f"/>
+  <rect x="48" y="48" width="416" height="416" rx="72" fill="#141418"/>
+  <!-- Terminal prompt > -->
+  <text x="80" y="230" font-family="monospace" font-size="130" font-weight="bold" fill="#7c5cfc">&#62;_</text>
+  <!-- Canvas dots -->
+  <circle cx="320" cy="340" r="10" fill="#2a2a35"/>
+  <circle cx="380" cy="340" r="10" fill="#2a2a35"/>
+  <circle cx="440" cy="340" r="10" fill="#7c5cfc" opacity="0.5"/>
+  <circle cx="320" cy="400" r="10" fill="#2a2a35"/>
+  <circle cx="380" cy="400" r="10" fill="#7c5cfc" opacity="0.5"/>
+  <circle cx="440" cy="400" r="10" fill="#2a2a35"/>
+</svg>
