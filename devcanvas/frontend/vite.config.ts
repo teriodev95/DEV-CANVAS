@@ -3,6 +3,8 @@ import tailwindcss from '@tailwindcss/vite';
 import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { defineConfig } from 'vite';
 
+const host = process.env.TAURI_DEV_HOST;
+
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
@@ -24,7 +26,6 @@ export default defineConfig({
 				],
 			},
 			workbox: {
-				// Cache app shell; skip API and WS endpoints
 				globPatterns: ['client/**/*.{js,css,html,svg,png,woff2}'],
 				navigateFallback: '/',
 				navigateFallbackDenylist: [/^\/api/, /^\/ws/],
@@ -45,8 +46,32 @@ export default defineConfig({
 				],
 			},
 			devOptions: {
-				enabled: false, // disable SW in dev to avoid caching issues
+				enabled: false,
 			},
 		}),
 	],
+	// Tauri dev server config: bind to TAURI_DEV_HOST if set, strict port
+	server: {
+		port: 5173,
+		strictPort: true,
+		host: host || false,
+		hmr: host
+			? {
+					protocol: 'ws',
+					host,
+					port: 5183,
+				}
+			: undefined,
+	},
+	// Prevent Vite from obscuring Rust errors in production
+	clearScreen: false,
+	// Enable environment variables in import.meta.env
+	envPrefix: ['VITE_', 'TAURI_ENV_*'],
+	build: {
+		// Tauri supports es2021
+		target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari13',
+		// Avoid minification errors in Tauri
+		minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
+		sourcemap: !!process.env.TAURI_ENV_DEBUG,
+	},
 });

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "bun --hot run src/index.ts",
     "start": "bun run src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:bin": "bun build --compile --target=bun --outfile=../frontend/src-tauri/binaries/devcanvas-backend src/index.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
