@@ -108,15 +108,14 @@
 
 	<!-- Footer -->
 	<div class="sidebar-foot">
-		<button class="foot-note" onclick={() => onAddNote?.()}>
-			<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-				<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-			</svg>
-			Note block
-		</button>
-
-		<div class="foot-row">
-			<span class="foot-label">Font</span>
+		<!-- Note + Font in one row -->
+		<div class="foot-main">
+			<button class="foot-note" onclick={() => onAddNote?.()}>
+				<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+					<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+				</svg>
+				Note block
+			</button>
 			<div class="stepper">
 				<button
 					class="stepper-btn"
@@ -134,10 +133,11 @@
 			</div>
 		</div>
 
+		<!-- Shortcuts: no boxes, just layered text -->
 		<div class="hints">
-			<span><kbd>T</kbd> terminal</span>
-			<span><kbd>N</kbd> note</span>
-			<span><kbd>⌘Z</kbd> undo</span>
+			<span class="hint"><i>T</i> terminal</span>
+			<span class="hint"><i>N</i> note</span>
+			<span class="hint"><i>⌘Z</i> undo</span>
 		</div>
 	</div>
 </aside>
@@ -325,16 +325,23 @@
 	/* ─── Footer ──────────────────────────────────────── */
 	.sidebar-foot {
 		border-top: 1px solid var(--border);
-		padding: 10px 14px 12px;
+		padding: 9px 14px 11px;
 		display: flex;
 		flex-direction: column;
-		gap: 9px;
+		gap: 7px;
+	}
+
+	/* Note + stepper in one row */
+	.foot-main {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
 	}
 
 	.foot-note {
 		display: flex;
 		align-items: center;
-		gap: 7px;
+		gap: 6px;
 		background: transparent;
 		border: none;
 		color: #3a3a50;
@@ -344,22 +351,9 @@
 		cursor: pointer;
 		padding: 0;
 		transition: color 0.12s ease;
-		width: fit-content;
 	}
 	.foot-note:hover {
 		color: var(--muted);
-	}
-
-	.foot-row {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-	}
-
-	.foot-label {
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 11px;
-		color: #3a3a50;
 	}
 
 	/* Stepper */
@@ -373,12 +367,12 @@
 	}
 
 	.stepper-btn {
-		width: 24px;
-		height: 22px;
+		width: 22px;
+		height: 20px;
 		background: transparent;
 		border: none;
 		color: #4a4a60;
-		font-size: 13px;
+		font-size: 12px;
 		cursor: pointer;
 		display: flex;
 		align-items: center;
@@ -391,46 +385,47 @@
 		color: var(--text);
 	}
 	.stepper-btn:disabled {
-		opacity: 0.25;
+		opacity: 0.2;
 		cursor: default;
 	}
 
 	.stepper-val {
-		width: 28px;
-		height: 22px;
+		width: 26px;
+		height: 20px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		font-family: var(--font-family-mono, monospace);
-		font-size: 11px;
-		color: var(--muted);
+		font-size: 10px;
+		color: #4a4a60;
 		border-left: 1px solid var(--border);
 		border-right: 1px solid var(--border);
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* Hints */
+	/* Hints — no boxes, two-tone text */
 	.hints {
 		display: flex;
-		gap: 10px;
-	}
-	.hints span {
-		display: flex;
 		align-items: center;
+		gap: 12px;
+	}
+
+	.hint {
+		display: flex;
+		align-items: baseline;
 		gap: 3px;
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 10px;
-		color: var(--border);
+		color: #2e2e3e;
 	}
-	kbd {
+
+	.hint i {
+		font-style: normal;
 		font-family: var(--font-family-mono, monospace);
 		font-size: 9px;
-		background: var(--surface2);
-		border: 1px solid var(--border);
-		border-radius: 3px;
-		padding: 1px 4px;
-		color: #4a4a60;
-		line-height: 1.5;
+		font-weight: 600;
+		color: #3e3e52;
+		letter-spacing: 0.02em;
 	}
 
 	/* ─── Modal ───────────────────────────────────────── */
