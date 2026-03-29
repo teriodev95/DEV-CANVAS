@@ -11,31 +11,16 @@
 	let newWorkspaceName = $state('');
 	let creating = $state(false);
 
-	function focusOnMount(node: HTMLElement) {
-		node.focus();
-	}
+	function focusOnMount(node: HTMLElement) { node.focus(); }
 
 	onMount(async () => {
 		try {
 			const data = await api.workspaces.list();
 			workspaces = Array.isArray(data) ? data : (data.workspaces ?? []);
 		} catch {
-			// Demo mode
 			workspaces = [
-				{
-					id: 'demo-1',
-					name: 'my-project',
-					createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-					updatedAt: new Date(Date.now() - 3600000).toISOString(),
-					sessionCount: 3,
-				},
-				{
-					id: 'demo-2',
-					name: 'infra-setup',
-					createdAt: new Date(Date.now() - 86400000 * 5).toISOString(),
-					updatedAt: new Date(Date.now() - 86400000).toISOString(),
-					sessionCount: 1,
-				},
+				{ id: 'demo-1', name: 'my-project',   createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), updatedAt: new Date(Date.now() - 3600000).toISOString(),    sessionCount: 3 },
+				{ id: 'demo-2', name: 'infra-setup',  createdAt: new Date(Date.now() - 86400000 * 5).toISOString(), updatedAt: new Date(Date.now() - 86400000).toISOString(),   sessionCount: 1 },
 			];
 		} finally {
 			loading = false;
@@ -53,13 +38,7 @@
 			goto(`/workspace/${workspace.id}`);
 		} catch {
 			const demoId = `demo-${Date.now()}`;
-			const demoWorkspace: Workspace = {
-				id: demoId,
-				name: newWorkspaceName.trim(),
-				createdAt: new Date().toISOString(),
-				sessionCount: 0,
-			};
-			workspaces = [...workspaces, demoWorkspace];
+			workspaces = [...workspaces, { id: demoId, name: newWorkspaceName.trim(), createdAt: new Date().toISOString(), sessionCount: 0 }];
 			showCreateModal = false;
 			newWorkspaceName = '';
 			goto(`/workspace/${demoId}`);
@@ -74,65 +53,53 @@
 	}
 </script>
 
-<div style="min-height: 100vh; background: var(--bg); overflow-y: auto; overflow-x: hidden; background-image: radial-gradient(circle, #2a2a35 1px, transparent 1px); background-size: 28px 28px;">
-	<!-- Top Bar -->
-	<header
-		style="
-			position: sticky; top: 0; z-index: 10;
-			background: rgba(13,13,15,0.9);
-			backdrop-filter: blur(12px);
-			border-bottom: 1px solid var(--border);
-			padding: 0 32px; height: 56px;
-			display: flex; align-items: center; justify-content: space-between;
-		"
-	>
-		<div style="display: flex; align-items: center; gap: 10px;">
-			<span style="font-family: var(--font-family-mono, monospace); font-size: 18px; font-weight: 500; color: var(--accent); letter-spacing: -0.5px;">
-				<span style="color: #3a3a50; font-weight: 400;">&gt;_</span> DevCanvas
-			</span>
-			<span style="background: rgba(124,92,252,0.12); border: 1px solid rgba(124,92,252,0.2); color: var(--accent); font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 10px; font-family: var(--font-family-mono, monospace);">v0.1</span>
+<div class="page">
+	<!-- Top bar -->
+	<header class="topbar">
+		<div class="brand">
+			<span class="brand-prompt">&gt;_</span>
+			<span class="brand-name">DevCanvas</span>
+			<span class="brand-version">v0.1</span>
 		</div>
-		<button
-			onclick={openCreate}
-			style="background: var(--accent); border: none; color: #fff; font-size: 13px; font-weight: 500; padding: 8px 16px; border-radius: 7px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background 0.15s ease, transform 0.1s ease;"
-			onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = 'var(--accent-hover)'; el.style.transform = 'translateY(-1px)'; }}
-			onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.background = 'var(--accent)'; el.style.transform = 'translateY(0)'; }}
-		>
-			<span style="font-size:16px;line-height:1;">+</span> New Workspace
-			<span style="font-family: var(--font-family-mono, monospace); font-size: 10px; color: rgba(255,255,255,0.5); background: rgba(255,255,255,0.1); padding: 1px 5px; border-radius: 3px; margin-left: 2px;">N</span>
+		<button class="btn-new" onclick={openCreate}>
+			<svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+				<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+			</svg>
+			New Workspace
+			<span class="kbd-hint">N</span>
 		</button>
 	</header>
 
-	<main style="max-width: 1200px; margin: 0 auto; padding: 48px 32px;">
-		<div style="margin-bottom: 32px;">
-			<h1 style="margin: 0 0 8px; font-size: 28px; font-weight: 600; color: var(--text); letter-spacing: -0.5px; font-family: var(--font-family-mono, monospace);">Workspaces</h1>
-			<p style="margin: 0; font-size: 14px; color: var(--muted); font-family: 'Inter', system-ui, sans-serif;">Your visual terminal workspaces</p>
+	<!-- Content -->
+	<main class="main">
+		<div class="page-heading">
+			<h1 class="page-title">Workspaces</h1>
+			<p class="page-sub">Your visual terminal workspaces</p>
 		</div>
 
 		{#if loading}
-			<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+			<div class="grid">
 				{#each { length: 4 } as _}
-					<div style="height: 120px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; animation: pulse-dot 1.5s ease-in-out infinite;"></div>
+					<div class="skeleton"></div>
 				{/each}
 			</div>
 		{:else if workspaces.length === 0}
-			<div style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 32px; text-align: center;">
-				<div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 20px 28px; margin-bottom: 24px; font-family: var(--font-family-mono, monospace); font-size: 13px; color: var(--muted); line-height: 1.8; text-align: left;">
-					<div><span style="color: #3dd68c;">~/devcanvas</span> <span style="color: var(--accent);">$</span> ls workspaces/</div>
-					<div style="color: #3a3a50; font-style: italic;">total 0</div>
-					<div><span style="color: var(--accent);">$</span> <span class="blink-cursor" style="display:inline-block;width:8px;height:13px;background:var(--accent);vertical-align:middle;animation:pulse-dot 1s step-end infinite;opacity:0.8;"></span></div>
+			<div class="empty">
+				<div class="empty-terminal">
+					<span class="et-path">~/devcanvas</span>
+					<span class="et-prompt"> $ </span>
+					<span class="et-cmd">ls workspaces/</span>
+					<br />
+					<span class="et-dim">total 0</span>
+					<br />
+					<span class="et-prompt">$ </span><span class="et-cursor"></span>
 				</div>
-				<h2 style="margin: 0 0 8px; font-size: 18px; font-weight: 600; color: var(--text);">No workspaces yet</h2>
-				<p style="margin: 0 0 24px; font-size: 14px; color: var(--muted); font-family: 'Inter', system-ui, sans-serif; max-width: 320px; line-height: 1.6;">Create a workspace to get started. Each workspace is an infinite canvas where you can arrange terminals and notes.</p>
-				<button
-					onclick={openCreate}
-					style="background: var(--accent); border: none; color: #fff; font-size: 14px; font-weight: 500; padding: 10px 24px; border-radius: 8px; cursor: pointer; transition: background 0.15s ease;"
-					onmouseenter={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--accent-hover)')}
-					onmouseleave={(e) => ((e.currentTarget as HTMLElement).style.background = 'var(--accent)')}
-				>Create your first workspace</button>
+				<h2 class="empty-title">No workspaces yet</h2>
+				<p class="empty-body">Create a workspace to get started. Each workspace is an infinite canvas where you can arrange terminals and notes.</p>
+				<button class="btn-cta" onclick={openCreate}>Create your first workspace</button>
 			</div>
 		{:else}
-			<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px;">
+			<div class="grid">
 				{#each workspaces as workspace (workspace.id)}
 					<WorkspaceCard {workspace} onclick={() => goto(`/workspace/${workspace.id}`)} />
 				{/each}
@@ -141,53 +108,375 @@
 	</main>
 </div>
 
+<!-- Create workspace modal -->
 {#if showCreateModal}
 	<div
-		style="position: fixed; inset: 0; background: rgba(0,0,0,0.6); backdrop-filter: blur(2px); z-index: 1000; display: flex; align-items: center; justify-content: center;"
-		role="dialog" aria-modal="true"
+		class="backdrop"
+		role="dialog"
+		aria-modal="true"
+		tabindex="-1"
 		onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
 		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
-		tabindex="-1"
 	>
 		<div
-			style="background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 28px; width: 380px; box-shadow: 0 24px 64px rgba(0,0,0,0.5);"
+			class="modal"
+			role="presentation"
 			onclick={(e) => e.stopPropagation()}
 			onkeydown={(e) => e.key === 'Enter' && createWorkspace()}
-			role="presentation"
 		>
-			<h2 style="margin: 0 0 6px; font-size: 18px; font-weight: 600; color: var(--text);">New Workspace</h2>
-			<p style="margin: 0 0 20px; font-size: 13px; color: var(--muted);">An infinite canvas for your terminals and notes.</p>
+			<div class="modal-header">
+				<h2 class="modal-title">New Workspace</h2>
+				<p class="modal-sub">An infinite canvas for your terminals and notes.</p>
+			</div>
 
-			<label style="display: block; margin-bottom: 20px;">
-				<span style="font-size: 11px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px;">Workspace name</span>
-				<input
-					type="text"
-					bind:value={newWorkspaceName}
-					placeholder="my-project"
-					style="width: 100%; background: var(--surface2); border: 1px solid var(--border); border-radius: 7px; padding: 10px 14px; color: var(--text); font-family: var(--font-family-mono, monospace); font-size: 14px; outline: none; transition: border-color 0.1s ease;"
-					onfocus={(e) => ((e.currentTarget as HTMLInputElement).style.borderColor = 'var(--accent)')}
-					onblur={(e) => ((e.currentTarget as HTMLInputElement).style.borderColor = 'var(--border)')}
-					use:focusOnMount
-				/>
-			</label>
+			<div class="modal-body">
+				<label class="field">
+					<span class="field-label">Name</span>
+					<input
+						class="field-input"
+						type="text"
+						bind:value={newWorkspaceName}
+						placeholder="my-project"
+						use:focusOnMount
+					/>
+				</label>
+			</div>
 
-			<div style="display: flex; gap: 8px; justify-content: flex-end;">
+			<div class="modal-foot">
+				<button class="btn-ghost" onclick={() => (showCreateModal = false)}>Cancel</button>
 				<button
-					onclick={() => (showCreateModal = false)}
-					style="background: transparent; border: 1px solid var(--border); color: var(--muted); padding: 8px 18px; border-radius: 7px; font-size: 13px; cursor: pointer; transition: border-color 0.1s, color 0.1s;"
-					onmouseenter={(e) => { const el = e.currentTarget as HTMLElement; el.style.borderColor = 'var(--muted)'; el.style.color = 'var(--text)'; }}
-					onmouseleave={(e) => { const el = e.currentTarget as HTMLElement; el.style.borderColor = 'var(--border)'; el.style.color = 'var(--muted)'; }}
-				>Cancel</button>
-				<button
+					class="btn-primary"
 					onclick={createWorkspace}
 					disabled={creating || !newWorkspaceName.trim()}
-					style="background: var(--accent); border: none; color: #fff; padding: 8px 18px; border-radius: 7px; font-size: 13px; font-weight: 500; cursor: pointer; opacity: {creating || !newWorkspaceName.trim() ? '0.5' : '1'}; transition: background 0.15s ease;"
-					onmouseenter={(e) => { if (!creating) (e.currentTarget as HTMLElement).style.background = 'var(--accent-hover)'; }}
-					onmouseleave={(e) => { (e.currentTarget as HTMLElement).style.background = 'var(--accent)'; }}
-				>
-					{creating ? 'Creating...' : 'Create Workspace'}
-				</button>
+				>{creating ? 'Creating…' : 'Create'}</button>
 			</div>
 		</div>
 	</div>
 {/if}
+
+<style>
+	/* ─── Page shell ─────────────────────────────── */
+	.page {
+		min-height: 100vh;
+		background: var(--bg);
+		background-image: radial-gradient(circle, #2a2a35 1px, transparent 1px);
+		background-size: 28px 28px;
+		display: flex;
+		flex-direction: column;
+		overflow-y: auto;
+		overflow-x: hidden;
+	}
+
+	/* ─── Top bar ────────────────────────────────── */
+	.topbar {
+		position: sticky;
+		top: 0;
+		z-index: 10;
+		height: 52px;
+		padding: 0 32px;
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		background: rgba(13, 13, 15, 0.88);
+		backdrop-filter: blur(12px);
+		border-bottom: 1px solid var(--border);
+		flex-shrink: 0;
+	}
+
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+	}
+
+	.brand-prompt {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 15px;
+		font-weight: 400;
+		color: #3a3a50;
+	}
+
+	.brand-name {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 15px;
+		font-weight: 500;
+		color: var(--accent);
+		letter-spacing: -0.3px;
+	}
+
+	.brand-version {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 10px;
+		font-weight: 500;
+		color: var(--accent);
+		background: rgba(124, 92, 252, 0.1);
+		border: 1px solid rgba(124, 92, 252, 0.2);
+		padding: 1px 6px;
+		border-radius: 8px;
+		opacity: 0.8;
+	}
+
+	.btn-new {
+		display: flex;
+		align-items: center;
+		gap: 7px;
+		background: var(--accent);
+		border: none;
+		color: #fff;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 13px;
+		font-weight: 500;
+		padding: 7px 14px;
+		border-radius: 7px;
+		cursor: pointer;
+		transition: background 0.15s ease, transform 0.1s ease;
+	}
+	.btn-new:hover {
+		background: var(--accent-hover);
+		transform: translateY(-1px);
+	}
+	.btn-new:active {
+		transform: translateY(0);
+	}
+
+	.kbd-hint {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 10px;
+		color: rgba(255, 255, 255, 0.45);
+		background: rgba(255, 255, 255, 0.1);
+		padding: 1px 5px;
+		border-radius: 3px;
+		margin-left: 2px;
+	}
+
+	/* ─── Main content ───────────────────────────── */
+	.main {
+		max-width: 1200px;
+		width: 100%;
+		margin: 0 auto;
+		padding: 48px 32px;
+	}
+
+	.page-heading {
+		margin-bottom: 32px;
+	}
+
+	.page-title {
+		margin: 0 0 6px;
+		font-family: var(--font-family-mono, monospace);
+		font-size: 26px;
+		font-weight: 600;
+		color: var(--text);
+		letter-spacing: -0.5px;
+	}
+
+	.page-sub {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 13px;
+		color: var(--muted);
+	}
+
+	/* ─── Grid ───────────────────────────────────── */
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+		gap: 16px;
+	}
+
+	.skeleton {
+		height: 110px;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 10px;
+		animation: pulse-dot 1.5s ease-in-out infinite;
+	}
+
+	/* ─── Empty state ────────────────────────────── */
+	.empty {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		padding: 72px 32px;
+		text-align: center;
+		gap: 12px;
+	}
+
+	.empty-terminal {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 12px;
+		line-height: 1.9;
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		padding: 14px 20px;
+		text-align: left;
+		margin-bottom: 12px;
+		color: var(--muted);
+	}
+
+	.et-path  { color: var(--green); }
+	.et-prompt { color: var(--accent); }
+	.et-cmd   { color: var(--text); }
+	.et-dim   { color: #3a3a50; font-style: italic; }
+	.et-cursor {
+		display: inline-block;
+		width: 7px;
+		height: 12px;
+		background: var(--accent);
+		vertical-align: middle;
+		animation: pulse-dot 1s step-end infinite;
+		opacity: 0.7;
+	}
+
+	.empty-title {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 16px;
+		font-weight: 600;
+		color: var(--text);
+	}
+
+	.empty-body {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 13px;
+		color: var(--muted);
+		max-width: 340px;
+		line-height: 1.7;
+	}
+
+	.btn-cta {
+		margin-top: 8px;
+		background: var(--accent);
+		border: none;
+		color: #fff;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 13px;
+		font-weight: 500;
+		padding: 9px 22px;
+		border-radius: 8px;
+		cursor: pointer;
+		transition: background 0.15s ease;
+	}
+	.btn-cta:hover { background: var(--accent-hover); }
+
+	/* ─── Modal ──────────────────────────────────── */
+	.backdrop {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		backdrop-filter: blur(4px);
+		z-index: 1000;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.modal {
+		background: var(--surface);
+		border: 1px solid var(--border);
+		border-radius: 12px;
+		width: 360px;
+		overflow: hidden;
+		box-shadow: 0 32px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.04);
+	}
+
+	.modal-header {
+		padding: 22px 22px 0;
+	}
+
+	.modal-title {
+		margin: 0 0 4px;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 15px;
+		font-weight: 600;
+		color: var(--text);
+		letter-spacing: -0.01em;
+	}
+
+	.modal-sub {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		color: var(--muted);
+		line-height: 1.5;
+	}
+
+	.modal-body {
+		padding: 18px 22px 16px;
+	}
+
+	.field { display: block; }
+
+	.field-label {
+		display: block;
+		margin-bottom: 6px;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 10px;
+		font-weight: 600;
+		color: #4a4a60;
+		text-transform: uppercase;
+		letter-spacing: 0.08em;
+	}
+
+	.field-input {
+		width: 100%;
+		padding: 9px 12px;
+		background: var(--surface2);
+		border: 1px solid var(--border);
+		border-radius: 7px;
+		color: var(--text);
+		font-family: var(--font-family-mono, monospace);
+		font-size: 13px;
+		outline: none;
+		box-sizing: border-box;
+		transition: border-color 0.15s ease, box-shadow 0.15s ease;
+	}
+	.field-input:focus {
+		border-color: var(--accent);
+		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.12);
+	}
+
+	.modal-foot {
+		display: flex;
+		align-items: center;
+		justify-content: flex-end;
+		gap: 8px;
+		padding: 12px 22px;
+		border-top: 1px solid var(--border);
+		background: var(--surface2);
+	}
+
+	.btn-ghost {
+		padding: 7px 16px;
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		color: var(--muted);
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: border-color 0.12s, color 0.12s;
+	}
+	.btn-ghost:hover {
+		border-color: var(--muted);
+		color: var(--text);
+	}
+
+	.btn-primary {
+		padding: 7px 16px;
+		background: var(--accent);
+		border: 1px solid transparent;
+		border-radius: 6px;
+		color: #fff;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		font-weight: 500;
+		cursor: pointer;
+		transition: background 0.12s ease;
+	}
+	.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
+	.btn-primary:disabled { opacity: 0.4; cursor: default; }
+</style>

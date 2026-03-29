@@ -12,6 +12,27 @@
 	let canvasEditor: CanvasEditor | undefined = $state();
 	let workspaceName = $state('Loading...');
 	let sidebarOpen = $state(true);
+	let editingName = $state(false);
+	let nameInput = $state('');
+
+	function startRename() {
+		nameInput = workspaceName;
+		editingName = true;
+	}
+
+	async function commitRename() {
+		if (!editingName) return;
+		editingName = false;
+		const trimmed = nameInput.trim();
+		if (!trimmed || trimmed === workspaceName) return;
+		workspaceName = trimmed;
+		try { await api.workspaces.rename(workspaceId, trimmed); } catch { /* silent */ }
+	}
+
+	function handleNameKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') (e.target as HTMLElement).blur();
+		if (e.key === 'Escape') { editingName = false; }
+	}
 
 	onMount(async () => {
 		// Load workspace data
@@ -108,7 +129,20 @@
 
 		<a href="/" class="logo">DevCanvas</a>
 		<span class="divider">/</span>
-		<span class="ws-name">{workspaceName}</span>
+		{#if editingName}
+			<!-- svelte-ignore a11y_autofocus -->
+			<input
+				class="ws-name-input"
+				bind:value={nameInput}
+				onblur={commitRename}
+				onkeydown={handleNameKeydown}
+				autofocus
+			/>
+		{:else}
+			<button class="ws-name" onclick={startRename} title="Click to rename">
+				{workspaceName}
+			</button>
+		{/if}
 		<div class="spacer"></div>
 		<button
 			class="btn-new"
@@ -190,6 +224,27 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		max-width: 220px;
+		background: none;
+		border: none;
+		padding: 2px 5px;
+		border-radius: 4px;
+		cursor: pointer;
+		transition: color 0.15s, background 0.15s;
+	}
+	.ws-name:hover { color: #c0c0d0; background: #1c1c22; }
+
+	.ws-name-input {
+		font-size: 13px;
+		font-weight: 500;
+		color: #e8e8f0;
+		font-family: 'JetBrains Mono', monospace;
+		background: #1c1c22;
+		border: 1px solid #7c5cfc55;
+		border-radius: 4px;
+		padding: 2px 6px;
+		outline: none;
+		max-width: 220px;
+		min-width: 80px;
 	}
 
 	.spacer { flex: 1; }
@@ -220,8 +275,8 @@
 
 	/* Sidebar slide */
 	.sidebar-wrap {
-		width: 240px;
-		min-width: 240px;
+		width: 228px;
+		min-width: 228px;
 		height: 100%;
 		overflow: hidden;
 		transition: width 0.2s ease, min-width 0.2s ease, opacity 0.15s ease;
