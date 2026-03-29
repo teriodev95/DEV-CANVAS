@@ -30,6 +30,9 @@ const sessionStreams = new Map<string, () => void>()
 // sessionId → { cols, rows } (track last known size)
 const sessionSizes = new Map<string, { cols: number; rows: number }>()
 
+// sessionId → session info cache (avoids DB lookup on every keystroke)
+const sessionCache = new Map<string, { type: 'tmux' | 'pty'; name: string }>()
+
 export interface WsData {
   clientId: string
 }
@@ -84,21 +87,23 @@ function ensureStream(sessionId: string, sessionName: string) {
     const now = Date.now()
     const seq = sequence++
 
-    // Persist to DB
-    try {
-      insertSessionOutput(sessionId, seq, chunk, now)
-      updateSessionActivity(sessionId, now)
-    } catch (err) {
-      console.error(`[ws] DB write error for session ${sessionId}:`, err)
-    }
-
-    // Broadcast to subscribers
+    // Broadcast first — don't block on DB write
     broadcastToSession(sessionId, {
       type: 'terminal:output',
       sessionId,
       data: chunk,
       sequence: seq,
       timestamp: now,
+    })
+
+    // Persist async
+    queueMicrotask(() => {
+      try {
+        insertSessionOutput(sessionId, seq, chunk, now)
+        updateSessionActivity(sessionId, now)
+      } catch (err) {
+        console.error(`[ws] DB write error for session ${sessionId}:`, err)
+      }
     })
   })
 
@@ -178,6 +183,11 @@ async function handleSessionSubscribe(
   }
   sessionSubscribers.get(sessionId)!.add(clientId)
 
+  // Cache session info to avoid DB lookups on the hot input path
+  if (!sessionCache.has(sessionId)) {
+    sessionCache.set(sessionId, { type: session.type as 'tmux' | 'pty', name: session.name })
+  }
+
   // Replay buffered output from DB
   if (fromSequence >= 0) {
     const rows = getSessionOutput(sessionId, fromSequence)
@@ -200,21 +210,24 @@ async function handleSessionSubscribe(
     const { getPty } = await import('../services/pty')
     if (!getPty(sessionId)) {
       let sequence = getNextSequence(sessionId)
-      spawnPty(sessionId, 220, 50, (chunk: string) => {
+      spawnPtyAndTrack(sessionId, 220, 50, (chunk: string) => {
         const now = Date.now()
         const seq = sequence++
-        try {
-          insertSessionOutput(sessionId, seq, chunk, now)
-          updateSessionActivity(sessionId, now)
-        } catch (err) {
-          console.error(`[ws] PTY DB write error:`, err)
-        }
+        // Broadcast immediately — persist to DB async (don't block output delivery)
         broadcastToSession(sessionId, {
           type: 'terminal:output',
           sessionId,
           data: chunk,
           sequence: seq,
           timestamp: now,
+        })
+        queueMicrotask(() => {
+          try {
+            insertSessionOutput(sessionId, seq, chunk, now)
+            updateSessionActivity(sessionId, now)
+          } catch (err) {
+            console.error(`[ws] PTY DB write error:`, err)
+          }
         })
       })
     }
@@ -227,30 +240,22 @@ async function handleTerminalInput(
 ) {
   const { id, sessionId, data } = msg
 
-  const session = getSessionById(sessionId)
-  if (!session) {
+  // Use in-memory cache to avoid a DB query on every keystroke
+  const cached = sessionCache.get(sessionId)
+  if (!cached) {
     sendToClient(ws, errorMsg(id, 'SESSION_NOT_FOUND', `Session ${sessionId} not found`))
     return
   }
 
   try {
-    if (session.type === 'tmux') {
-      await tmuxService.sendInput(session.name, data)
+    if (cached.type === 'tmux') {
+      await tmuxService.sendInput(cached.name, data)
     } else {
-      const { getPty } = await import('../services/pty')
-      const pty = getPty(sessionId)
-      if (pty) {
-        pty.onData // pty has proc, onData, cleanup — access write via the spawned PtySession
-        // Re-route: write via the proc's stdin directly since spawnPty returns PtySession
-        // We need to store PtySession separately — use a local map via the pty module
-        // Workaround: store write fn in a companion map
-        const writeFn = ptyWriters.get(sessionId)
-        if (writeFn) {
-          writeFn(data)
-        }
-      }
+      const writeFn = ptyWriters.get(sessionId)
+      if (writeFn) writeFn(data)
     }
-    updateSessionActivity(sessionId, Date.now())
+    // Fire-and-forget — don't await DB write on the hot input path
+    queueMicrotask(() => updateSessionActivity(sessionId, Date.now()))
   } catch (err: any) {
     console.error(`[ws] terminal:input error:`, err)
     sendToClient(ws, errorMsg(id, 'INPUT_FAILED', err.message))
@@ -407,4 +412,5 @@ export function notifySessionDeleted(sessionId: string) {
   killPty(sessionId)
   ptyWriters.delete(sessionId)
   sessionSubscribers.delete(sessionId)
+  sessionCache.delete(sessionId)
 }

@@ -92,18 +92,32 @@ export async function listSessions(): Promise<string[]> {
 }
 
 /**
- * Send input to a tmux session using the load-buffer / paste-buffer approach
- * to avoid shell escaping issues entirely.
+ * Send input to a tmux session.
+ *
+ * For interactive typing (≤ 64 bytes) we use `send-keys -t name -l data`
+ * which is a single subprocess call.
+ * For larger payloads (paste) we fall back to load-buffer → paste-buffer
+ * which handles arbitrary binary data more safely.
  */
 export async function sendInput(name: string, data: string): Promise<void> {
-  // Write input to a temp file so we can pipe it into tmux load-buffer via stdin
-  // `tmux load-buffer -` reads from stdin
+  if (data.length <= 64) {
+    // Fast path: one subprocess instead of two
+    const { exitCode, stderr } = await run(
+      'tmux', ['send-keys', '-t', name, '-l', data],
+      { ignoreError: true }
+    )
+    if (exitCode !== 0) {
+      console.error(`[tmux] send-keys failed: ${stderr}`)
+    }
+    return
+  }
+
+  // Slow path for large pastes: load-buffer + paste-buffer
   const load = await run('tmux', ['load-buffer', '-'], { stdin: data, ignoreError: true })
   if (load.exitCode !== 0) {
     console.error(`[tmux] load-buffer failed: ${load.stderr}`)
     return
   }
-
   const paste = await run('tmux', ['paste-buffer', '-t', name, '-d'], { ignoreError: true })
   if (paste.exitCode !== 0) {
     console.error(`[tmux] paste-buffer failed: ${paste.stderr}`)
