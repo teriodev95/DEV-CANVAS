@@ -16,6 +16,13 @@
 
 	function focusOnMount(node: HTMLElement) { node.focus(); }
 
+	// Listen for global "new session" intent (topbar button, T key fallback)
+	$effect(() => {
+		const handler = () => openCreateModal('tmux');
+		window.addEventListener('devcanvas:new-session', handler);
+		return () => window.removeEventListener('devcanvas:new-session', handler);
+	});
+
 	let createType = $state<'tmux' | 'pty'>('tmux');
 	let createName = $state('');
 	let creating = $state(false);

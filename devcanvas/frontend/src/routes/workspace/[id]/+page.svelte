@@ -68,11 +68,15 @@
 			const target = e.target as HTMLElement;
 			if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 			if (e.key === 'T' || e.key === 't') {
-				// Add next session not already on canvas
 				const snap = canvasEditor?.getSnapshot();
 				const onCanvas = new Set((snap?.nodes ?? []).map((n) => n.id));
 				const next = $sessions.find((s) => !onCanvas.has(`terminal-${s.id}`));
-				if (next) canvasEditor?.addTerminalNode(next.id, next.name, next.type);
+				if (next) {
+					canvasEditor?.addTerminalNode(next.id, next.name, next.type);
+				} else {
+					// No session available → open create modal
+					window.dispatchEvent(new CustomEvent('devcanvas:new-session'));
+				}
 			} else if (e.key === 'N' || e.key === 'n') {
 				canvasEditor?.addNoteNode();
 			} else if (e.key === 'b' || e.key === 'B') {
