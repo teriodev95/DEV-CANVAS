@@ -21,7 +21,12 @@ sessions.get('/', (c) => {
 
 // POST /api/sessions — create a session
 sessions.post('/', async (c) => {
-  let body: { workspaceId?: string; name?: string; type?: string }
+  let body: {
+    workspaceId?: string
+    name?: string
+    type?: string
+    sshConfig?: { host: string; user: string; port?: number }
+  }
   try {
     body = await c.req.json()
   } catch {
@@ -29,17 +34,32 @@ sessions.post('/', async (c) => {
   }
 
   if (!body.workspaceId) return c.json({ error: 'workspaceId is required' }, 400)
-  if (!body.name) return c.json({ error: 'name is required' }, 400)
 
   const workspace = getWorkspaceById(body.workspaceId)
   if (!workspace) return c.json({ error: 'Workspace not found' }, 404)
 
-  const sessionType = (body.type === 'pty' ? 'pty' : 'tmux') as 'tmux' | 'pty'
+  const sessionType = (['tmux', 'pty', 'ssh'].includes(body.type ?? '')
+    ? body.type
+    : 'tmux') as 'tmux' | 'pty' | 'ssh'
+
+  // SSH: derive name from connection details; others: require explicit name
+  let sessionName: string
+  if (sessionType === 'ssh') {
+    if (!body.sshConfig?.host || !body.sshConfig?.user) {
+      return c.json({ error: 'sshConfig.host and sshConfig.user are required for ssh sessions' }, 400)
+    }
+    const { host, user, port = 22 } = body.sshConfig
+    sessionName = body.name?.trim() || `${user}@${host}:${port}`
+  } else {
+    if (!body.name) return c.json({ error: 'name is required' }, 400)
+    sessionName = body.name.trim()
+  }
+
   const now = Date.now()
   const session = {
     id: crypto.randomUUID(),
     workspace_id: body.workspaceId,
-    name: body.name.trim(),
+    name: sessionName,
     type: sessionType,
     status: 'active',
     created_at: now,
@@ -50,6 +70,7 @@ sessions.post('/', async (c) => {
     if (sessionType === 'tmux') {
       await tmuxService.createSession(session.name)
     }
+    // PTY and SSH sessions are spawned on first WebSocket subscribe
     insertSession(session)
   } catch (err: any) {
     console.error('[sessions] create error:', err)
@@ -70,6 +91,7 @@ sessions.delete('/:id', async (c) => {
     if (session.type === 'tmux') {
       await tmuxService.killSession(session.name)
     } else {
+      // Both 'pty' and 'ssh' are tracked in activePtys
       killPty(id)
     }
   } catch (err) {

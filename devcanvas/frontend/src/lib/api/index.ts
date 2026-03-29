@@ -22,6 +22,13 @@ export const api = {
 		get: (id: string) =>
 			fetch(`${BASE}/workspaces/${id}`).then(handleResponse),
 
+		rename: (id: string, name: string) =>
+			fetch(`${BASE}/workspaces/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify({ name }),
+				headers: { 'Content-Type': 'application/json' },
+			}).then(handleResponse),
+
 		saveCanvas: (id: string, snapshot: unknown) =>
 			fetch(`${BASE}/workspaces/${id}/canvas`, {
 				method: 'PUT',
@@ -37,10 +44,15 @@ export const api = {
 		list: (workspaceId: string) =>
 			fetch(`${BASE}/sessions?workspaceId=${workspaceId}`).then(handleResponse),
 
-		create: (workspaceId: string, name: string, type: 'tmux' | 'pty') =>
+		create: (
+			workspaceId: string,
+			name: string,
+			type: 'tmux' | 'pty' | 'ssh',
+			sshConfig?: { host: string; user: string; port?: number }
+		) =>
 			fetch(`${BASE}/sessions`, {
 				method: 'POST',
-				body: JSON.stringify({ workspaceId, name, type }),
+				body: JSON.stringify({ workspaceId, name, type, sshConfig }),
 				headers: { 'Content-Type': 'application/json' },
 			}).then(handleResponse),
 

@@ -90,6 +90,13 @@
 		scheduleSave();
 	}
 
+	// ─── Update node data (color / icon) ────────────────────────────────────────
+	function handleUpdateNode(e: Event) {
+		const { id, data } = (e as CustomEvent).detail;
+		nodes = nodes.map((n) => (n.id === id ? { ...n, data } : n));
+		scheduleSave();
+	}
+
 	// ─── Keyboard: Ctrl/Cmd+Z ───────────────────────────────────────────────────
 	function handleKeydown(e: KeyboardEvent) {
 		const target = e.target as HTMLElement;
@@ -102,6 +109,7 @@
 
 	onMount(() => {
 		window.addEventListener('devcanvas:remove-node', handleRemoveNode);
+		window.addEventListener('devcanvas:update-node', handleUpdateNode);
 		window.addEventListener('keydown', handleKeydown);
 		// Capture initial empty state
 		pushHistory();
@@ -109,6 +117,7 @@
 
 	onDestroy(() => {
 		window.removeEventListener('devcanvas:remove-node', handleRemoveNode);
+		window.removeEventListener('devcanvas:update-node', handleUpdateNode);
 		window.removeEventListener('keydown', handleKeydown);
 	});
 

@@ -12,7 +12,7 @@ import {
 } from '../db'
 import * as tmuxService from '../services/tmux'
 import { tmuxControl } from '../services/tmux-control'
-import { spawnPty, killPty } from '../services/pty'
+import { spawnPty, spawnSsh, killPty } from '../services/pty'
 import type { WSMessage, SessionInfo } from './protocol'
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,7 @@ const sessionStreams = new Map<string, () => void>()
 const sessionSizes = new Map<string, { cols: number; rows: number }>()
 
 // sessionId → session info cache (avoids DB lookup on every keystroke)
-const sessionCache = new Map<string, { type: 'tmux' | 'pty'; name: string }>()
+const sessionCache = new Map<string, { type: 'tmux' | 'pty' | 'ssh'; name: string }>()
 
 export interface WsData {
   clientId: string
@@ -186,7 +186,7 @@ async function handleSessionSubscribe(
 
   // Cache session info to avoid DB lookups on the hot input path
   if (!sessionCache.has(sessionId)) {
-    sessionCache.set(sessionId, { type: session.type as 'tmux' | 'pty', name: session.name })
+    sessionCache.set(sessionId, { type: session.type as 'tmux' | 'pty' | 'ssh', name: session.name })
   }
 
   // Replay buffered output from DB
@@ -206,15 +206,15 @@ async function handleSessionSubscribe(
   // Start streaming if not already active
   if (session.type === 'tmux') {
     ensureStream(sessionId, session.name)
-  } else if (session.type === 'pty') {
-    // Spawn PTY if not already running
+  } else if (session.type === 'pty' || session.type === 'ssh') {
+    // Spawn PTY/SSH process if not already running
     const { getPty } = await import('../services/pty')
     if (!getPty(sessionId)) {
       let sequence = getNextSequence(sessionId)
-      spawnPtyAndTrack(sessionId, 220, 50, (chunk: string) => {
+
+      const onChunk = (chunk: string) => {
         const now = Date.now()
         const seq = sequence++
-        // Broadcast immediately — persist to DB async (don't block output delivery)
         broadcastToSession(sessionId, {
           type: 'terminal:output',
           sessionId,
@@ -230,7 +230,21 @@ async function handleSessionSubscribe(
             console.error(`[ws] PTY DB write error:`, err)
           }
         })
-      })
+      }
+
+      if (session.type === 'ssh') {
+        // Parse SSH connection info from name: user@host:port
+        const match = session.name.match(/^(.+)@(.+):(\d+)$/)
+        if (match) {
+          const [, user, host, portStr] = match
+          const sshSession = spawnSsh(sessionId, host, user, parseInt(portStr, 10), 220, 50, onChunk)
+          ptyWriters.set(sessionId, sshSession.write.bind(sshSession))
+        } else {
+          console.error(`[ws] SSH session name "${session.name}" does not match user@host:port`)
+        }
+      } else {
+        spawnPtyAndTrack(sessionId, 220, 50, onChunk)
+      }
     }
   }
 }
@@ -255,6 +269,7 @@ async function handleTerminalInput(
       const sent = tmuxControl.sendKeys(cached.name, data)
       if (!sent) await tmuxService.sendInput(cached.name, data)
     } else {
+      // Both 'pty' and 'ssh' use the ptyWriters map
       const writeFn = ptyWriters.get(sessionId)
       if (writeFn) writeFn(data)
     }
@@ -318,7 +333,7 @@ async function handleSessionList(
     id: r.id,
     workspaceId: r.workspace_id,
     name: r.name,
-    type: r.type as 'tmux' | 'pty',
+    type: r.type as 'tmux' | 'pty' | 'ssh',
     status: r.status,
     createdAt: r.created_at,
     lastActivity: r.last_activity,

@@ -37,6 +37,15 @@ yarn-error.log*
 
 # Tauri
 src-tauri/target/
+frontend/src-tauri/target/
+
+# Sidecar binaries — built locally per platform, never committed
+frontend/src-tauri/binaries/*
+!frontend/src-tauri/binaries/.gitkeep
+
+# Claude Code
+.claude/
+frontend/.claude/
 
 # TypeScript
 *.tsbuildinfo

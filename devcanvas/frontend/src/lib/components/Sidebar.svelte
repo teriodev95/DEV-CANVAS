@@ -6,7 +6,7 @@
 
 	type Props = {
 		workspaceId: string;
-		onAddTerminal?: (sessionId: string, sessionName: string, sessionType: 'tmux' | 'pty') => void;
+		onAddTerminal?: (sessionId: string, sessionName: string, sessionType: 'tmux' | 'pty' | 'ssh') => void;
 		onAddNote?: () => void;
 	};
 
@@ -23,8 +23,11 @@
 		return () => window.removeEventListener('devcanvas:new-session', handler);
 	});
 
-	let createType = $state<'tmux' | 'pty'>('tmux');
+	let createType = $state<'tmux' | 'pty' | 'ssh'>('tmux');
 	let createName = $state('');
+	let sshHost = $state('');
+	let sshUser = $state('');
+	let sshPort = $state('22');
 	let creating = $state(false);
 
 	function getDefaultName(): string {
@@ -35,17 +38,36 @@
 		return `dev-${(nums.length > 0 ? Math.max(...nums) : 0) + 1}`;
 	}
 
-	function openCreateModal(type: 'tmux' | 'pty') {
+	function openCreateModal(type: 'tmux' | 'pty' | 'ssh') {
 		createType = type;
 		createName = getDefaultName();
+		sshHost = '';
+		sshUser = '';
+		sshPort = '22';
 		showCreateModal = true;
 	}
 
+	function isCreateReady(): boolean {
+		if (creating) return false;
+		if (createType === 'ssh') return sshHost.trim().length > 0 && sshUser.trim().length > 0;
+		return createName.trim().length > 0;
+	}
+
 	async function createSession() {
-		if (!createName.trim() || creating) return;
+		if (!isCreateReady()) return;
 		creating = true;
 		try {
-			const session = await api.sessions.create(workspaceId, createName.trim(), createType);
+			let session;
+			if (createType === 'ssh') {
+				const port = parseInt(sshPort, 10) || 22;
+				session = await api.sessions.create(workspaceId, '', 'ssh', {
+					host: sshHost.trim(),
+					user: sshUser.trim(),
+					port,
+				});
+			} else {
+				session = await api.sessions.create(workspaceId, createName.trim(), createType);
+			}
 			sessions.update(s => [...s, session]);
 			showCreateModal = false;
 			onAddTerminal?.(session.id, session.name, session.type);
@@ -81,8 +103,12 @@
 				+ tmux
 			</button>
 			<span class="action-sep">·</span>
-			<button class="action-btn action-btn--pty" onclick={() => openCreateModal('pty')} title="New PTY session">
+			<button class="action-btn action-btn--pty" onclick={() => openCreateModal('pty')} title="New local shell session">
 				+ pty
+			</button>
+			<span class="action-sep">·</span>
+			<button class="action-btn action-btn--ssh" onclick={() => openCreateModal('ssh')} title="New SSH session">
+				+ ssh
 			</button>
 		</div>
 	</div>
@@ -167,35 +193,43 @@
 		>
 			<!-- Type toggle -->
 			<div class="modal-toggle">
-				<button
-					class="toggle-opt"
-					class:active={createType === 'tmux'}
-					onclick={() => createType = 'tmux'}
-				>tmux</button>
-				<button
-					class="toggle-opt"
-					class:active={createType === 'pty'}
-					onclick={() => createType = 'pty'}
-				>pty</button>
+				<button class="toggle-opt" class:active={createType === 'tmux'} onclick={() => createType = 'tmux'}>tmux</button>
+				<button class="toggle-opt" class:active={createType === 'pty'}  onclick={() => createType = 'pty'}>local</button>
+				<button class="toggle-opt" class:active={createType === 'ssh'}  onclick={() => createType = 'ssh'}>ssh</button>
 			</div>
 
 			<div class="modal-body">
 				<p class="modal-desc">
-					{createType === 'tmux'
-						? 'Creates a multiplexed tmux session on the server'
-						: 'Spawns a direct PTY shell process'}
+					{#if createType === 'tmux'}
+						Persistent multiplexed session via tmux — survives reconnects
+					{:else if createType === 'pty'}
+						Direct shell process using your system's default shell
+					{:else}
+						Connect to a remote machine over SSH
+					{/if}
 				</p>
 
-				<label class="field">
-					<span class="field-label">Name</span>
-					<input
-						class="field-input"
-						type="text"
-						bind:value={createName}
-						placeholder="dev-1"
-						use:focusOnMount
-					/>
-				</label>
+				{#if createType === 'ssh'}
+					<label class="field">
+						<span class="field-label">Host</span>
+						<input class="field-input" type="text" bind:value={sshHost} placeholder="192.168.1.10" use:focusOnMount />
+					</label>
+					<div class="field-row">
+						<label class="field field-grow">
+							<span class="field-label">User</span>
+							<input class="field-input" type="text" bind:value={sshUser} placeholder="ubuntu" />
+						</label>
+						<label class="field field-port">
+							<span class="field-label">Port</span>
+							<input class="field-input" type="number" bind:value={sshPort} min="1" max="65535" placeholder="22" />
+						</label>
+					</div>
+				{:else}
+					<label class="field">
+						<span class="field-label">Name</span>
+						<input class="field-input" type="text" bind:value={createName} placeholder="dev-1" use:focusOnMount />
+					</label>
+				{/if}
 			</div>
 
 			<div class="modal-foot">
@@ -203,8 +237,8 @@
 				<button
 					class="btn-primary"
 					onclick={createSession}
-					disabled={creating || !createName.trim()}
-				>{creating ? 'Creating…' : 'Create'}</button>
+					disabled={!isCreateReady()}
+				>{creating ? 'Connecting…' : 'Create'}</button>
 			</div>
 		</div>
 	</div>
@@ -292,6 +326,10 @@
 	.action-btn--pty:hover {
 		color: #3dd68c;
 		background: rgba(61, 214, 140, 0.08);
+	}
+	.action-btn--ssh:hover {
+		color: #38bdf8;
+		background: rgba(56, 189, 248, 0.08);
 	}
 
 	/* ─── Session list ────────────────────────────────── */
@@ -498,6 +536,9 @@
 
 	.modal-body {
 		padding: 20px 20px 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 0;
 	}
 
 	.modal-desc {
@@ -512,6 +553,16 @@
 	.field {
 		display: block;
 	}
+
+	.field-row {
+		display: flex;
+		gap: 10px;
+		margin-top: 12px;
+	}
+
+	.field-grow { flex: 1; }
+
+	.field-port { width: 80px; min-width: 80px; }
 
 	.field-label {
 		display: block;

@@ -31,7 +31,7 @@
 >
 	<StatusDot status={session.status === 'active' ? 'active' : 'idle'} />
 	<span class="name">{session.name}</span>
-	<span class="badge" class:tmux={session.type === 'tmux'}>{session.type}</span>
+	<span class="badge" class:tmux={session.type === 'tmux'} class:ssh={session.type === 'ssh'}>{session.type}</span>
 </div>
 
 {#if menu}
@@ -94,6 +94,11 @@
 		color: #8b6ff5;
 		background: rgba(124, 92, 252, 0.07);
 		border-color: rgba(124, 92, 252, 0.18);
+	}
+	.badge.ssh {
+		color: #38bdf8;
+		background: rgba(56, 189, 248, 0.07);
+		border-color: rgba(56, 189, 248, 0.18);
 	}
 
 	/* Context menu */

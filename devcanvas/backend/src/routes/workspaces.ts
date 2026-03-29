@@ -3,6 +3,7 @@ import {
   getWorkspaces,
   getWorkspaceById,
   insertWorkspace,
+  updateWorkspaceName,
   updateCanvasSnapshot,
 } from '../db'
 
@@ -52,6 +53,24 @@ workspaces.get('/:id', (c) => {
   const row = getWorkspaceById(id)
   if (!row) return c.json({ error: 'Workspace not found' }, 404)
   return c.json(rowToDto(row))
+})
+
+// PATCH /api/workspaces/:id — rename workspace
+workspaces.patch('/:id', async (c) => {
+  const id = c.req.param('id')
+  const existing = getWorkspaceById(id)
+  if (!existing) return c.json({ error: 'Workspace not found' }, 404)
+
+  let body: { name?: string }
+  try { body = await c.req.json() } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400)
+  }
+
+  const name = body.name?.trim()
+  if (!name) return c.json({ error: 'name is required' }, 400)
+
+  updateWorkspaceName(id, name, Date.now())
+  return c.json(rowToDto(getWorkspaceById(id)!))
 })
 
 // PUT /api/workspaces/:id/canvas — save canvas snapshot

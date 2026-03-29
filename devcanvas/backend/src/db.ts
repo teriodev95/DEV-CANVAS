@@ -73,6 +73,12 @@ export function insertWorkspace(workspace: WorkspaceRow) {
     .run(workspace.id, workspace.name, workspace.canvas_snapshot, workspace.created_at, workspace.updated_at)
 }
 
+export function updateWorkspaceName(id: string, name: string, updatedAt: number) {
+  return getDb()
+    .query('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?')
+    .run(name, updatedAt, id)
+}
+
 export function updateCanvasSnapshot(id: string, snapshot: string, updatedAt: number) {
   return getDb()
     .query('UPDATE workspaces SET canvas_snapshot = ?, updated_at = ? WHERE id = ?')

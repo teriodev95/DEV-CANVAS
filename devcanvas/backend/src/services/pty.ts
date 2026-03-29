@@ -24,6 +24,14 @@ function cleanEnv(extra: Record<string, string> = {}): Record<string, string> {
   return { ...env, ...extra }
 }
 
+/**
+ * Detect the user's default shell from $SHELL env, falling back to
+ * /bin/zsh on macOS and /bin/bash on everything else.
+ */
+function getDefaultShell(): string {
+  return process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
+}
+
 export interface PtySession {
   id: string
   pid: number
@@ -55,12 +63,13 @@ export function spawnPty(
   rows: number = 50,
   onData: (chunk: string) => void
 ): PtySession {
-  const proc = Bun.spawn(['/bin/bash', '-i'], {
+  const shell = getDefaultShell()
+  const proc = Bun.spawn([shell, '-i'], {
     stdin: 'pipe',
     stdout: 'pipe',
     stderr: 'pipe',
     env: cleanEnv({
-      SHELL: '/bin/bash',
+      SHELL: shell,
       TERM: 'xterm-256color',
       COLUMNS: String(cols),
       LINES: String(rows),
@@ -158,6 +167,95 @@ export function killPty(sessionId: string): void {
     pty.cleanup()
     activePtys.delete(sessionId)
   }
+}
+
+/**
+ * Spawn an SSH connection as a PTY-like subprocess.
+ *
+ * Uses `ssh -t -t` to force pseudo-TTY allocation even when stdin is a pipe.
+ * The session is tracked in `activePtys` under the same interface as spawnPty.
+ */
+export function spawnSsh(
+  sessionId: string,
+  host: string,
+  user: string,
+  port: number = 22,
+  cols: number = 220,
+  rows: number = 50,
+  onData: (chunk: string) => void
+): PtySession {
+  // -t -t forces PTY even when stdin is not a terminal
+  const args = ['-t', '-t', '-p', String(port), `${user}@${host}`]
+  const proc = Bun.spawn(['ssh', ...args], {
+    stdin: 'pipe',
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: cleanEnv({
+      TERM: 'xterm-256color',
+      COLUMNS: String(cols),
+      LINES: String(rows),
+    }),
+  })
+
+  let stopped = false
+
+  async function readStream(stream: ReadableStream<Uint8Array>, label: string) {
+    const reader = stream.getReader()
+    try {
+      while (!stopped) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value && value.length > 0) {
+          onData(new TextDecoder().decode(value))
+        }
+      }
+    } catch (err: any) {
+      if (!stopped) console.error(`[ssh:${sessionId}] ${label} read error:`, err.message)
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  readStream(proc.stdout, 'stdout')
+  readStream(proc.stderr, 'stderr')
+
+  proc.exited.then((code) => {
+    if (!stopped) {
+      stopped = true
+      onData(`\r\n[SSH connection closed (code ${code})]\r\n`)
+      activePtys.delete(sessionId)
+    }
+  })
+
+  function write(data: string) {
+    if (stopped || !proc.stdin) return
+    try {
+      proc.stdin.write(new TextEncoder().encode(data))
+    } catch (err) {
+      console.error(`[ssh:${sessionId}] write error:`, err)
+    }
+  }
+
+  function resize(_cols: number, _rows: number) {
+    console.debug(`[ssh:${sessionId}] resize to ${_cols}x${_rows} (best-effort)`)
+  }
+
+  function kill() {
+    stopped = true
+    try { proc.kill() } catch {}
+    activePtys.delete(sessionId)
+  }
+
+  const ptySession: PtySession = {
+    id: sessionId,
+    pid: proc.pid ?? 0,
+    write,
+    resize,
+    kill,
+  }
+
+  activePtys.set(sessionId, { proc, onData, cleanup: kill })
+  return ptySession
 }
 
 /**

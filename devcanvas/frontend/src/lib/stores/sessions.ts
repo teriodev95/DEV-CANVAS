@@ -3,7 +3,7 @@ import { writable } from 'svelte/store';
 export type Session = {
 	id: string;
 	name: string;
-	type: 'tmux' | 'pty';
+	type: 'tmux' | 'pty' | 'ssh';
 	status: 'active' | 'idle' | 'dead';
 	workspaceId: string;
 	createdAt: string;
