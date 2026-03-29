@@ -11,6 +11,7 @@ import {
   getSessionOutput,
 } from '../db'
 import * as tmuxService from '../services/tmux'
+import { tmuxControl } from '../services/tmux-control'
 import { spawnPty, killPty } from '../services/pty'
 import type { WSMessage, SessionInfo } from './protocol'
 
@@ -249,7 +250,10 @@ async function handleTerminalInput(
 
   try {
     if (cached.type === 'tmux') {
-      await tmuxService.sendInput(cached.name, data)
+      // Fast path: control-mode client (~0.1ms, no subprocess)
+      // Falls back to subprocess if control client isn't ready yet
+      const sent = tmuxControl.sendKeys(cached.name, data)
+      if (!sent) await tmuxService.sendInput(cached.name, data)
     } else {
       const writeFn = ptyWriters.get(sessionId)
       if (writeFn) writeFn(data)

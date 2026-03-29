@@ -18,7 +18,7 @@ try {
 // Strip them so spawned shells/tmux sessions start clean.
 const CLAUDE_ENV_KEYS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS']
 
-function cleanEnv(): Record<string, string> {
+export function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && !CLAUDE_ENV_KEYS.includes(k)) env[k] = v

@@ -6,6 +6,7 @@ import { workspaces } from './routes/workspaces'
 import { sessions } from './routes/sessions'
 import { wsHandler, type WsData } from './ws/handler'
 import { isTmuxAvailable, listSessions as tmuxListSessions, createSession as tmuxCreateSession } from './services/tmux'
+import { tmuxControl } from './services/tmux-control'
 
 // ---------------------------------------------------------------------------
 // App setup
@@ -70,6 +71,14 @@ app.onError((err, c) => {
 async function startup() {
   // Ensure DB is initialized (tables created)
   getDb()
+
+  // Start persistent tmux control-mode client (low-latency keystroke delivery)
+  const tmuxAvailableEarly = await isTmuxAvailable()
+  if (tmuxAvailableEarly) {
+    tmuxControl.start().catch((err) =>
+      console.warn('[startup] tmux control client failed to start:', err)
+    )
+  }
 
   // Create a default workspace if none exists
   const existingWorkspaces = getWorkspaces()
