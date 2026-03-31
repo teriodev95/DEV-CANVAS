@@ -37,6 +37,8 @@ export interface SessionAppearance {
   fontSize?: number | null
 }
 
+export type TaskStatus = 'todo' | 'doing' | 'done'
+
 const DEFAULT_WORKSPACE_SETTINGS: WorkspaceSettings = {
   appearance: {
     icon: 'terminal',
@@ -185,6 +187,44 @@ export function getDb(): Database {
     CREATE INDEX IF NOT EXISTS idx_output ON session_output(session_id, sequence);
   `)
 
+  _db.run(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'todo',
+      workdir TEXT,
+      active_session_id TEXT,
+      live_note TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      resolved_at INTEGER
+    );
+  `)
+
+  _db.run(`
+    CREATE INDEX IF NOT EXISTS idx_tasks_workspace_status_updated
+    ON tasks(workspace_id, status, updated_at DESC);
+  `)
+
+  _db.run(`
+    CREATE TABLE IF NOT EXISTS task_activity (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      actor_type TEXT NOT NULL DEFAULT 'system',
+      actor_label TEXT NOT NULL DEFAULT 'System',
+      kind TEXT NOT NULL DEFAULT 'note',
+      message TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
+  `)
+
+  _db.run(`
+    CREATE INDEX IF NOT EXISTS idx_task_activity_task_created
+    ON task_activity(task_id, created_at DESC);
+  `)
+
   ensureColumn(_db, 'workspaces', 'settings_json', `TEXT DEFAULT '${JSON.stringify(DEFAULT_WORKSPACE_SETTINGS)}'`)
   ensureColumn(_db, 'sessions', 'ssh_lookup', 'TEXT')
   ensureColumn(_db, 'sessions', 'ssh_host', 'TEXT')
@@ -195,6 +235,12 @@ export function getDb(): Database {
   ensureColumn(_db, 'sessions', 'ssh_remote_session', 'TEXT')
   ensureColumn(_db, 'sessions', 'working_dir', 'TEXT')
   ensureColumn(_db, 'sessions', 'appearance_json', `TEXT DEFAULT '{}'`)
+  ensureColumn(_db, 'tasks', 'description', `TEXT NOT NULL DEFAULT ''`)
+  ensureColumn(_db, 'tasks', 'status', `TEXT NOT NULL DEFAULT 'todo'`)
+  ensureColumn(_db, 'tasks', 'workdir', 'TEXT')
+  ensureColumn(_db, 'tasks', 'active_session_id', 'TEXT')
+  ensureColumn(_db, 'tasks', 'live_note', `TEXT NOT NULL DEFAULT ''`)
+  ensureColumn(_db, 'tasks', 'resolved_at', 'INTEGER')
 
   return _db
 }
@@ -255,12 +301,19 @@ export function deleteWorkspaceCascade(id: string): string[] {
     const sessionRows = db
       .query('SELECT id FROM sessions WHERE workspace_id = ?')
       .all(workspaceId) as Array<{ id: string }>
+    const taskRows = db
+      .query('SELECT id FROM tasks WHERE workspace_id = ?')
+      .all(workspaceId) as Array<{ id: string }>
 
     for (const row of sessionRows) {
       db.query('DELETE FROM session_output WHERE session_id = ?').run(row.id)
     }
+    for (const row of taskRows) {
+      db.query('DELETE FROM task_activity WHERE task_id = ?').run(row.id)
+    }
 
     db.query('DELETE FROM sessions WHERE workspace_id = ?').run(workspaceId)
+    db.query('DELETE FROM tasks WHERE workspace_id = ?').run(workspaceId)
     db.query('DELETE FROM workspaces WHERE id = ?').run(workspaceId)
 
     return sessionRows.map((row) => row.id)
@@ -365,6 +418,136 @@ export function deleteSession(id: string) {
   return getDb().query('DELETE FROM sessions WHERE id = ?').run(id)
 }
 
+export function getTasks(workspaceId: string) {
+  return getDb()
+    .query('SELECT * FROM tasks WHERE workspace_id = ? ORDER BY updated_at DESC, created_at DESC')
+    .all(workspaceId) as TaskRow[]
+}
+
+export function getTaskById(id: string) {
+  return getDb().query('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow | null
+}
+
+export function getTasksByActiveSession(sessionId: string) {
+  return getDb()
+    .query('SELECT * FROM tasks WHERE active_session_id = ? ORDER BY updated_at DESC')
+    .all(sessionId) as TaskRow[]
+}
+
+export function insertTask(task: TaskRow) {
+  return getDb()
+    .query(`
+      INSERT INTO tasks (
+        id, workspace_id, title, description, status, workdir, active_session_id, live_note,
+        created_at, updated_at, resolved_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      task.id,
+      task.workspace_id,
+      task.title,
+      task.description,
+      task.status,
+      task.workdir ?? null,
+      task.active_session_id ?? null,
+      task.live_note,
+      task.created_at,
+      task.updated_at,
+      task.resolved_at ?? null
+    )
+}
+
+export function updateTask(
+  id: string,
+  values: {
+    title?: string
+    description?: string
+    status?: TaskStatus
+    workdir?: string | null
+    activeSessionId?: string | null
+    liveNote?: string
+    updatedAt: number
+    resolvedAt?: number | null
+  }
+) {
+  const fields: string[] = ['updated_at = ?']
+  const params: Array<string | number | null> = [values.updatedAt]
+
+  if (values.title !== undefined) {
+    fields.push('title = ?')
+    params.push(values.title)
+  }
+  if (values.description !== undefined) {
+    fields.push('description = ?')
+    params.push(values.description)
+  }
+  if (values.status !== undefined) {
+    fields.push('status = ?')
+    params.push(values.status)
+  }
+  if (values.workdir !== undefined) {
+    fields.push('workdir = ?')
+    params.push(values.workdir)
+  }
+  if (values.activeSessionId !== undefined) {
+    fields.push('active_session_id = ?')
+    params.push(values.activeSessionId)
+  }
+  if (values.liveNote !== undefined) {
+    fields.push('live_note = ?')
+    params.push(values.liveNote)
+  }
+  if (values.resolvedAt !== undefined) {
+    fields.push('resolved_at = ?')
+    params.push(values.resolvedAt)
+  }
+
+  params.push(id)
+  return getDb()
+    .query(`UPDATE tasks SET ${fields.join(', ')} WHERE id = ?`)
+    .run(...params)
+}
+
+export function deleteTask(id: string) {
+  getDb().query('DELETE FROM task_activity WHERE task_id = ?').run(id)
+  return getDb().query('DELETE FROM tasks WHERE id = ?').run(id)
+}
+
+export function clearTaskActiveSession(sessionId: string, updatedAt: number) {
+  return getDb()
+    .query('UPDATE tasks SET active_session_id = NULL, updated_at = ? WHERE active_session_id = ?')
+    .run(updatedAt, sessionId)
+}
+
+export function getTaskActivity(taskId: string, limit = 100) {
+  return getDb()
+    .query(`
+      SELECT * FROM task_activity
+      WHERE task_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `)
+    .all(taskId, limit) as TaskActivityRow[]
+}
+
+export function insertTaskActivity(activity: TaskActivityRow) {
+  return getDb()
+    .query(`
+      INSERT INTO task_activity (
+        id, task_id, actor_type, actor_label, kind, message, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    `)
+    .run(
+      activity.id,
+      activity.task_id,
+      activity.actor_type,
+      activity.actor_label,
+      activity.kind,
+      activity.message,
+      activity.created_at
+    )
+}
+
 export function insertSessionOutput(sessionId: string, sequence: number, data: string, timestamp: number) {
   return getDb()
     .query('INSERT INTO session_output (session_id, sequence, data, timestamp) VALUES (?, ?, ?, ?)')
@@ -433,4 +616,28 @@ export interface SessionOutputRow {
   sequence: number
   data: string
   timestamp: number
+}
+
+export interface TaskRow {
+  id: string
+  workspace_id: string
+  title: string
+  description: string
+  status: TaskStatus
+  workdir?: string | null
+  active_session_id?: string | null
+  live_note: string
+  created_at: number
+  updated_at: number
+  resolved_at?: number | null
+}
+
+export interface TaskActivityRow {
+  id: string
+  task_id: string
+  actor_type: string
+  actor_label: string
+  kind: string
+  message: string
+  created_at: number
 }

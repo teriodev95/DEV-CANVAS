@@ -1,19 +1,22 @@
 import { Hono } from 'hono'
 import {
+  clearTaskActiveSession,
   getSessions,
   getSessionById,
   insertSession,
   deleteSession,
+  getTasksByActiveSession,
   getWorkspaceById,
   normalizeSessionAppearance,
   serializeSessionAppearance,
+  type TaskStatus,
   updateSessionSettings,
   updateSessionStatus,
   updateSessionWorkingDir,
 } from '../db'
 import * as tmuxService from '../services/tmux'
 import { terminateSessionRuntime } from '../services/session-runtime'
-import { notifySessionDeleted } from '../ws/handler'
+import { notifySessionDeleted, notifyTaskUpsert } from '../ws/handler'
 import { makeDurableRemoteSessionName, resolveSshTarget } from '../services/ssh'
 import { getDefaultWorkingDirectory, resolveWorkingDirectory } from '../services/working-dir'
 
@@ -271,6 +274,7 @@ sessions.delete('/:id', async (c) => {
   const id = c.req.param('id')
   const session = getSessionById(id)
   if (!session) return c.json({ error: 'Session not found' }, 404)
+  const linkedTasks = getTasksByActiveSession(id)
 
   // Kill the underlying process
   try {
@@ -285,6 +289,18 @@ sessions.delete('/:id', async (c) => {
 
   // Remove from DB
   deleteSession(id)
+
+  if (linkedTasks.length > 0) {
+    const now = Date.now()
+    clearTaskActiveSession(id, now)
+    for (const task of linkedTasks) {
+      notifyTaskUpsert(task.workspace_id, rowToTaskDto({
+        ...task,
+        active_session_id: null,
+        updated_at: now,
+      }))
+    }
+  }
 
   return c.json({ ok: true, id })
 })
@@ -322,6 +338,34 @@ function rowToDto(row: {
     lastActivity: row.last_activity,
     workingDir: row.working_dir ?? null,
     appearance,
+  }
+}
+
+function rowToTaskDto(row: {
+  id: string
+  workspace_id: string
+  title: string
+  description: string
+  status: TaskStatus
+  workdir?: string | null
+  active_session_id?: string | null
+  live_note: string
+  created_at: number
+  updated_at: number
+  resolved_at?: number | null
+}) {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    workdir: row.workdir ?? null,
+    activeSessionId: row.active_session_id ?? null,
+    liveNote: row.live_note,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    resolvedAt: row.resolved_at ?? null,
   }
 }
 

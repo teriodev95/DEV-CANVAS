@@ -10,6 +10,7 @@
 		TERMINAL_INTERACTION_EVENT,
 		activeTerminalNodeId,
 		terminalQuickSlots,
+		fullscreenTerminal,
 	} from '$lib/terminal/navigation';
 	import { detectApplePlatform, getTerminalSlotShortcutLabel } from '$lib/utils/shortcuts';
 	import {
@@ -63,7 +64,7 @@
 		resolveTerminalAppearance(defaultWorkspaceSettings, null)
 	);
 	let nodeEl: HTMLDivElement | undefined = $state();
-	let terminalPane: { focus: () => void; blur: () => void } | undefined = $state();
+	let terminalPane: { focus: () => void; blur: () => void; reconnect: () => void } | undefined = $state();
 	let persistTimer: ReturnType<typeof setTimeout> | null = null;
 	let statusTimer: ReturnType<typeof setTimeout> | null = null;
 	let pulseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -92,6 +93,7 @@
 		slotIndex ? getTerminalSlotShortcutLabel(slotIndex, isApplePlatform) : null
 	);
 	const isActiveTerminal = $derived($activeTerminalNodeId === id);
+	const isThisFullscreen = $derived($fullscreenTerminal?.nodeId === id);
 	const saveStatusLabel = $derived.by(() => {
 		if (savingState === 'saving') return 'Guardando...';
 		if (savingState === 'saved') return 'Listo';
@@ -122,6 +124,18 @@
 		interacting = true;
 		window.dispatchEvent(new CustomEvent(TERMINAL_INTERACTION_EVENT, { detail: { id } }));
 		focusTerminal();
+	}
+
+	function handleBarDoubleClick() {
+		fullscreenTerminal.set({
+			nodeId: id,
+			sessionId: data.sessionId,
+			sessionName: displayName,
+			sessionType: displayType,
+			themeId: liveAppearance.themeId,
+			fontFamily: liveAppearance.fontFamily,
+			fontSize: liveAppearance.fontSize,
+		});
 	}
 
 	function triggerPulse() {
@@ -468,7 +482,7 @@
 	style="--bar-bg:{colorPreset.bar}; --dot-color:{colorPreset.dot}; --dot-glow:{colorPreset.glow}; --border-color:{colorPreset.border}"
 >
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<div class="bar terminal-drag-handle" onclick={() => { interacting = false; terminalPane?.blur(); }}>
+	<div class="bar terminal-drag-handle" onclick={() => { interacting = false; terminalPane?.blur(); }} ondblclick={handleBarDoubleClick}>
 		<span class="icon" aria-hidden="true">
 			<HeaderIcon size={11} strokeWidth={1.9} />
 		</span>
@@ -486,13 +500,14 @@
 		<button
 			class="bar-action nodrag nopan nowheel"
 			type="button"
-			title="Editar terminal"
-			onclick={openEditorFromButton}
+			title="Reconectar terminal"
+			onclick={(e) => { e.stopPropagation(); terminalPane?.reconnect(); }}
 		>
 			<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-				<path d="M6.6 2.2H2.9A1.7 1.7 0 0 0 1.2 3.9v9.2a1.7 1.7 0 0 0 1.7 1.7h9.2a1.7 1.7 0 0 0 1.7-1.7V9.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-				<path d="M10 2.3h3.7v3.7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-				<path d="M6 10L13.7 2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+				<path d="M1.5 8a6.5 6.5 0 0 1 11.48-4.16" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+				<path d="M14.5 8A6.5 6.5 0 0 1 3.02 12.16" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+				<path d="M13 1.5v2.5h-2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+				<path d="M3 14.5V12h2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
 			</svg>
 		</button>
 		<button
@@ -513,17 +528,21 @@
 	</div>
 
 	<div class="body nodrag nopan nowheel" onpointerdown={handleBodyPointerDown}>
-		<TerminalPane
-			bind:this={terminalPane}
-			sessionId={data.sessionId}
-			showStatus={false}
-			embedded={true}
-			themeId={liveAppearance.themeId}
-			fontFamily={liveAppearance.fontFamily}
-			fontSize={liveAppearance.fontSize}
-		/>
+		{#if isThisFullscreen}
+			<div class="fullscreen-placeholder">Fullscreen activo</div>
+		{:else}
+			<TerminalPane
+				bind:this={terminalPane}
+				sessionId={data.sessionId}
+				showStatus={false}
+				embedded={true}
+				themeId={liveAppearance.themeId}
+				fontFamily={liveAppearance.fontFamily}
+				fontSize={liveAppearance.fontSize}
+			/>
+		{/if}
 
-		{#if !interacting}
+		{#if !interacting && !isThisFullscreen}
 			<div class="hint-badge">click to type</div>
 		{/if}
 	</div>
@@ -955,6 +974,18 @@
 		background:
 			radial-gradient(circle at top left, rgba(124, 92, 252, 0.06), transparent 28%),
 			#0b1118;
+	}
+
+	.fullscreen-placeholder {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 100%;
+		height: 100%;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 11px;
+		color: #4a5568;
+		letter-spacing: 0.04em;
 	}
 
 	.hint-badge {

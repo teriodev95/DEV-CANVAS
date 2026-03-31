@@ -14,6 +14,7 @@ import {
 import { workspaces } from './routes/workspaces'
 import { sessions } from './routes/sessions'
 import { connections } from './routes/connections'
+import { tasks } from './routes/tasks'
 import { wsHandler, type WsData } from './ws/handler'
 import {
   isTmuxAvailable,
@@ -71,6 +72,7 @@ app.get('/health', async (c) => {
 app.route('/api/workspaces', workspaces)
 app.route('/api/sessions', sessions)
 app.route('/api/connections', connections)
+app.route('/api/tasks', tasks)
 
 // 404 fallback for unmatched API routes
 app.notFound((c) => {

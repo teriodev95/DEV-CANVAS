@@ -120,7 +120,7 @@
 		</div>
 	{/if}
 
-	<div class="node">
+	<div class="node nowheel">
 		<div class="accent" style="background:{accentHex}"></div>
 		<textarea
 			bind:value={editContent}
@@ -137,8 +137,10 @@
 
 <style>
 	.note-root {
-		width: 100%;
-		height: 100%;
+		width: calc(100% * var(--flow-zoom, 1));
+		height: calc(100% * var(--flow-zoom, 1));
+		transform: scale(calc(1 / var(--flow-zoom, 1)));
+		transform-origin: 0 0;
 		position: relative;
 	}
 

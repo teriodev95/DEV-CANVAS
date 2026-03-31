@@ -16,7 +16,7 @@ import {
 import * as tmuxService from '../services/tmux'
 import { tmuxControl } from '../services/tmux-control'
 import { spawnPty, spawnSsh, killPty } from '../services/pty'
-import type { WSMessage, SessionInfo } from './protocol'
+import type { WSMessage, SessionInfo, TaskActivityInfo, TaskInfo } from './protocol'
 import { getDefaultWorkingDirectory, resolveWorkingDirectory } from '../services/working-dir'
 
 // ---------------------------------------------------------------------------
@@ -28,6 +28,9 @@ const clients = new Map<string, ServerWebSocket<WsData>>()
 
 // sessionId → Set<clientId>
 const sessionSubscribers = new Map<string, Set<string>>()
+
+// workspaceId → Set<clientId>
+const workspaceSubscribers = new Map<string, Set<string>>()
 
 // sessionId → cleanup function (for FIFO streams)
 const sessionStreams = new Map<string, () => void>()
@@ -70,6 +73,26 @@ function broadcastToSession(sessionId: string, msg: object) {
       ws.send(payload)
     } catch (err) {
       console.error(`[ws] Broadcast to ${clientId} failed:`, err)
+      subscribers.delete(clientId)
+    }
+  }
+}
+
+function broadcastToWorkspace(workspaceId: string, msg: object) {
+  const subscribers = workspaceSubscribers.get(workspaceId)
+  if (!subscribers || subscribers.size === 0) return
+
+  const payload = JSON.stringify(msg)
+  for (const clientId of subscribers) {
+    const ws = clients.get(clientId)
+    if (!ws) {
+      subscribers.delete(clientId)
+      continue
+    }
+    try {
+      ws.send(payload)
+    } catch (err) {
+      console.error(`[ws] Workspace broadcast to ${clientId} failed:`, err)
       subscribers.delete(clientId)
     }
   }
@@ -459,6 +482,32 @@ async function handleSessionList(
   sendToClient(ws, { type: 'session:list:response', id, sessions })
 }
 
+function handleTasksSubscribe(
+  ws: ServerWebSocket<WsData>,
+  msg: Extract<WSMessage, { type: 'tasks:subscribe' }>
+) {
+  const { clientId } = ws.data
+  const { id, workspaceId } = msg
+  if (!workspaceSubscribers.has(workspaceId)) {
+    workspaceSubscribers.set(workspaceId, new Set())
+  }
+  workspaceSubscribers.get(workspaceId)!.add(clientId)
+  sendToClient(ws, { type: 'tasks:subscribed', id, workspaceId })
+}
+
+function handleTasksUnsubscribe(
+  ws: ServerWebSocket<WsData>,
+  msg: Extract<WSMessage, { type: 'tasks:unsubscribe' }>
+) {
+  const { clientId } = ws.data
+  const { workspaceId } = msg
+  const subs = workspaceSubscribers.get(workspaceId)
+  if (subs) {
+    subs.delete(clientId)
+    if (subs.size === 0) workspaceSubscribers.delete(workspaceId)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WebSocket lifecycle
 // ---------------------------------------------------------------------------
@@ -497,6 +546,14 @@ export const wsHandler = {
           await handleSessionList(ws, msg)
           break
 
+        case 'tasks:subscribe':
+          handleTasksSubscribe(ws, msg)
+          break
+
+        case 'tasks:unsubscribe':
+          handleTasksUnsubscribe(ws, msg)
+          break
+
         case 'terminal:input':
           await handleTerminalInput(ws, msg)
           break
@@ -528,6 +585,12 @@ export const wsHandler = {
         sessionSubscribers.delete(sessionId)
       }
     }
+    for (const [workspaceId, subs] of workspaceSubscribers.entries()) {
+      subs.delete(clientId)
+      if (subs.size === 0) {
+        workspaceSubscribers.delete(workspaceId)
+      }
+    }
 
     console.log(`[ws] Client disconnected: ${clientId} (code=${code})`)
   },
@@ -550,4 +613,28 @@ export function notifySessionDeleted(sessionId: string) {
   ptyWriters.delete(sessionId)
   sessionSubscribers.delete(sessionId)
   sessionCache.delete(sessionId)
+}
+
+export function notifyTaskUpsert(workspaceId: string, task: TaskInfo) {
+  broadcastToWorkspace(workspaceId, {
+    type: 'task:upsert',
+    workspaceId,
+    task,
+  })
+}
+
+export function notifyTaskDeleted(workspaceId: string, taskId: string) {
+  broadcastToWorkspace(workspaceId, {
+    type: 'task:delete',
+    workspaceId,
+    taskId,
+  })
+}
+
+export function notifyTaskActivity(workspaceId: string, activity: TaskActivityInfo) {
+  broadcastToWorkspace(workspaceId, {
+    type: 'task:activity',
+    workspaceId,
+    activity,
+  })
 }

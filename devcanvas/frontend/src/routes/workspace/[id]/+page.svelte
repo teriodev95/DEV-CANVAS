@@ -4,6 +4,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SessionLauncher from '$lib/components/SessionLauncher.svelte';
 	import CanvasEditor from '$lib/canvas/CanvasEditor.svelte';
+	import TerminalFullscreen from '$lib/terminal/TerminalFullscreen.svelte';
 	import type { CanvasSnapshot } from '$lib/canvas/CanvasEditor.svelte';
 	import { sessions, sessionsLoading } from '$lib/stores/sessions';
 	import type { Session } from '$lib/stores/sessions';
@@ -206,6 +207,18 @@
 		const id = workspaceId;
 		if (!id) return;
 		let cancelled = false;
+
+		// Flush pending save for the PREVIOUS workspace before clearing state.
+		// Without this, the 2s debounce save is cancelled and snapshot changes
+		// (including a newly added task-board node) are lost on workspace switch.
+		if (hydratedWorkspaceId && hydratedWorkspaceId !== id) {
+			canvasEditor?.cancelPendingSave();
+			const snapshot = canvasEditor?.getSnapshot();
+			if (snapshot) {
+				void api.workspaces.saveCanvas(hydratedWorkspaceId, snapshot);
+			}
+		}
+
 		hydratedWorkspaceId = null;
 
 		// Reset state
@@ -314,8 +327,6 @@
 
 		return () => {
 			cancelled = true;
-			canvasEditor?.cancelPendingSave();
-			void persistWorkspaceSnapshot(id);
 		};
 	});
 
@@ -346,7 +357,11 @@
 	}
 
 	function handleAddNote() {
-		canvasEditor?.addNoteNode();
+		canvasEditor?.startNotePlacement();
+	}
+
+	function handleShowTaskBoard() {
+		window.dispatchEvent(new CustomEvent('devcanvas:add-task-board'));
 	}
 
 	function handleCreateTerminal() {
@@ -420,6 +435,10 @@
 				<span>+</span>
 				<span>Terminal</span>
 			</button>
+			<button class="chip action-chip" onclick={handleShowTaskBoard}>
+				<span>+</span>
+				<span>Tasks</span>
+			</button>
 			<button class="chip action-chip" onclick={handleAddNote}>
 				<span>+</span>
 				<span>Note</span>
@@ -439,6 +458,8 @@
 	{:else}
 		<SessionLauncher {workspaceId} onAddTerminal={handleAddTerminal} />
 	{/if}
+
+	<TerminalFullscreen />
 </div>
 
 <style>

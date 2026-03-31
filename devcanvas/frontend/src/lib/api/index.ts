@@ -27,6 +27,32 @@ type WorkspaceDeleteResponse = DeleteResponse & {
 	deletedSessionIds?: string[];
 };
 
+export type TaskStatus = 'todo' | 'doing' | 'done';
+
+export type Task = {
+	id: string;
+	workspaceId: string;
+	title: string;
+	description: string;
+	status: TaskStatus;
+	workdir?: string | null;
+	activeSessionId?: string | null;
+	liveNote: string;
+	createdAt: number;
+	updatedAt: number;
+	resolvedAt?: number | null;
+};
+
+export type TaskActivity = {
+	id: string;
+	taskId: string;
+	actorType: string;
+	actorLabel: string;
+	kind: string;
+	message: string;
+	createdAt: number;
+};
+
 export type LiveTmuxSession = {
 	name: string;
 	tracked: boolean;
@@ -134,11 +160,12 @@ export const api = {
 				durable?: boolean;
 				remoteSessionName?: string;
 				identityFile?: string;
-			}
+			},
+			workingDir?: string
 		) =>
 			fetch(`${BASE}/sessions`, {
 				method: 'POST',
-				body: JSON.stringify({ workspaceId, name, type, sshConfig }),
+				body: JSON.stringify({ workspaceId, name, type, sshConfig, workingDir }),
 				headers: { 'Content-Type': 'application/json' },
 			}).then((r) => handleResponse<Session>(r)),
 
@@ -163,5 +190,96 @@ export const api = {
 
 		delete: (id: string) =>
 			fetch(`${BASE}/sessions/${id}`, { method: 'DELETE' }).then((r) => handleResponse<DeleteResponse>(r)),
+	},
+
+	tasks: {
+		list: (workspaceId: string) =>
+			fetch(`${BASE}/tasks?workspaceId=${encodeURIComponent(workspaceId)}`).then((r) =>
+				handleResponse<Task[]>(r)
+			),
+
+		get: (id: string) =>
+			fetch(`${BASE}/tasks/${id}`).then((r) => handleResponse<Task>(r)),
+
+		getActivity: (id: string, limit = 100) =>
+			fetch(`${BASE}/tasks/${id}/activity?limit=${limit}`).then((r) =>
+				handleResponse<TaskActivity[]>(r)
+			),
+
+		create: (
+			workspaceId: string,
+			payload: {
+				title: string;
+				description?: string;
+				workdir?: string | null;
+				actorType?: string;
+				actorLabel?: string;
+			}
+		) =>
+			fetch(`${BASE}/tasks`, {
+				method: 'POST',
+				body: JSON.stringify({ workspaceId, ...payload }),
+				headers: { 'Content-Type': 'application/json' },
+			}).then((r) => handleResponse<Task>(r)),
+
+		update: (
+			id: string,
+			payload: {
+				title?: string;
+				description?: string;
+				workdir?: string | null;
+				liveNote?: string;
+				activeSessionId?: string | null;
+				actorType?: string;
+				actorLabel?: string;
+			}
+		) =>
+			fetch(`${BASE}/tasks/${id}`, {
+				method: 'PATCH',
+				body: JSON.stringify(payload),
+				headers: { 'Content-Type': 'application/json' },
+			}).then((r) => handleResponse<Task>(r)),
+
+		move: (
+			id: string,
+			status: TaskStatus,
+			payload?: { actorType?: string; actorLabel?: string }
+		) =>
+			fetch(`${BASE}/tasks/${id}/move`, {
+				method: 'POST',
+				body: JSON.stringify({ status, ...payload }),
+				headers: { 'Content-Type': 'application/json' },
+			}).then((r) => handleResponse<Task>(r)),
+
+		resolve: (
+			id: string,
+			payload?: { note?: string; actorType?: string; actorLabel?: string }
+		) =>
+			fetch(`${BASE}/tasks/${id}/resolve`, {
+				method: 'POST',
+				body: JSON.stringify(payload ?? {}),
+				headers: { 'Content-Type': 'application/json' },
+			}).then((r) => handleResponse<Task>(r)),
+
+		addActivity: (
+			id: string,
+			payload: {
+				message: string;
+				kind?: string;
+				liveNote?: string;
+				actorType?: string;
+				actorLabel?: string;
+			}
+		) =>
+			fetch(`${BASE}/tasks/${id}/activity`, {
+				method: 'POST',
+				body: JSON.stringify(payload),
+				headers: { 'Content-Type': 'application/json' },
+			}).then((r) => handleResponse<TaskActivity>(r)),
+
+		delete: (id: string) =>
+			fetch(`${BASE}/tasks/${id}`, {
+				method: 'DELETE',
+			}).then((r) => handleResponse<DeleteResponse>(r)),
 	},
 };

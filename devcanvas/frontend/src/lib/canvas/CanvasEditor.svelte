@@ -5,6 +5,7 @@
 	import '@xyflow/svelte/dist/style.css';
 	import TerminalNode from './TerminalNode.svelte';
 	import NoteNode from './NoteNode.svelte';
+	import TaskBoardNode from './TaskBoardNode.svelte';
 	import FlowViewportController from './FlowViewportController.svelte';
 	import type { Node, Edge, NodeTypes } from '@xyflow/svelte';
 	import {
@@ -13,6 +14,8 @@
 		activeTerminalNodeId,
 		resetTerminalNavigation,
 		terminalQuickSlots,
+		fullscreenTerminal,
+		isFullscreen,
 		type TerminalFocusOrigin,
 	} from '$lib/terminal/navigation';
 	import {
@@ -37,10 +40,21 @@
 	const nodeTypes: NodeTypes = {
 		terminal: TerminalNode,
 		note: NoteNode,
+		'task-board': TaskBoardNode,
 	};
 
 	const TERMINAL_DRAG_HANDLE = '.terminal-drag-handle';
+	const TASK_BOARD_DRAG_HANDLE = '.task-board-drag-handle';
+	const LEGACY_TASK_BOARD_NODE_ID = 'task-board';
 	const DEFAULT_VIEWPORT: Viewport = { x: 0, y: 0, zoom: 1 };
+
+	function taskBoardNodeId(wsId: string = workspaceId) {
+		return `task-board-${wsId}`;
+	}
+
+	function isTaskBoardNode(node: Node): boolean {
+		return node.type === 'task-board' || node.id === LEGACY_TASK_BOARD_NODE_ID || node.id.startsWith('task-board-');
+	}
 
 	let nodes = $state<Node[]>([]);
 	let edges = $state<Edge[]>([]);
@@ -52,6 +66,10 @@
 				restoreViewport: (viewport: Viewport) => Promise<boolean>;
 				fitToContent: () => Promise<boolean>;
 				readViewport: () => Viewport;
+				screenToFlow: (point: { x: number; y: number }) => { x: number; y: number };
+				zoomIn: () => void;
+				zoomOut: () => void;
+				zoomReset: () => void;
 		  }
 		| undefined = $state();
 	let activeNodeId = $state<string | null>(null);
@@ -61,6 +79,11 @@
 	const slotShortcutHint = $derived(getTerminalSlotShortcutLabel(1, isApplePlatform));
 	const cycleShortcutHint = $derived(getTerminalCycleShortcutLabel(isApplePlatform));
 
+	// ─── Placement mode ─────────────────────────────────────────────────────────
+	type PlacementMode = 'note' | null;
+	let placementMode = $state<PlacementMode>(null);
+	let ghostScreenPos = $state<{ x: number; y: number } | null>(null);
+
 	// ─── Undo history ───────────────────────────────────────────────────────────
 	// Plain arrays — not reactive, UI doesn't depend on them
 	let history: Array<{ nodes: Node[]; edges: Edge[] }> = [];
@@ -68,13 +91,29 @@
 	const MAX_HISTORY = 50;
 
 	function decorateNode(node: Node): Node {
-		if (node.type !== 'terminal') return node;
+		if (node.type === 'terminal') {
+			return {
+				...node,
+				draggable: node.draggable ?? true,
+				dragHandle: TERMINAL_DRAG_HANDLE,
+			};
+		}
 
-		return {
-			...node,
-			draggable: node.draggable ?? true,
-			dragHandle: TERMINAL_DRAG_HANDLE,
-		};
+		if (node.type === 'task-board') {
+			const correctId = taskBoardNodeId();
+			return {
+				...node,
+				id: correctId,
+				draggable: node.draggable ?? true,
+				dragHandle: TASK_BOARD_DRAG_HANDLE,
+				data: {
+					...node.data,
+					workspaceId,
+				},
+			};
+		}
+
+		return node;
 	}
 
 	function cloneState(): { nodes: Node[]; edges: Edge[] } {
@@ -230,6 +269,31 @@
 		rememberTerminal(nodeId);
 	}
 
+	// ─── Placement mode ─────────────────────────────────────────────────────────
+	export function startNotePlacement() {
+		placementMode = 'note';
+		ghostScreenPos = null;
+	}
+
+	function cancelPlacement() {
+		placementMode = null;
+		ghostScreenPos = null;
+	}
+
+	function handlePlacementMouseMove(event: MouseEvent) {
+		if (!placementMode) return;
+		ghostScreenPos = { x: event.clientX, y: event.clientY };
+	}
+
+	function handlePaneClick({ event }: { event: MouseEvent }) {
+		if (!placementMode || !viewportController) return;
+		const flowPos = viewportController.screenToFlow({ x: event.clientX, y: event.clientY });
+		if (placementMode === 'note') {
+			addNoteNodeAt(flowPos.x, flowPos.y);
+		}
+		cancelPlacement();
+	}
+
 	// ─── Drag end → push history ────────────────────────────────────────────────
 	function handleDragStop() {
 		pushHistory();
@@ -256,14 +320,49 @@
 		scheduleSave();
 	}
 
+	function handleAddTerminalEvent(e: Event) {
+		const detail = (e as CustomEvent<{ sessionId?: string; sessionName?: string; sessionType?: string }>).detail;
+		if (!detail?.sessionId || !detail.sessionName || !detail.sessionType) return;
+		addTerminalNode(detail.sessionId, detail.sessionName, detail.sessionType);
+	}
+
+	function handleAddTaskBoardEvent() {
+		void addTaskBoardNode();
+	}
+
 	// ─── Keyboard: Ctrl/Cmd+Z ───────────────────────────────────────────────────
+	function enterFullscreenForNode(nodeId: string) {
+		const node = nodes.find((n) => n.id === nodeId && n.type === 'terminal');
+		if (!node) return;
+		const d = node.data as { sessionId: string; sessionName: string; sessionType: string };
+		fullscreenTerminal.set({
+			nodeId,
+			sessionId: d.sessionId,
+			sessionName: d.sessionName,
+			sessionType: d.sessionType,
+		});
+	}
+
 	function handleKeydown(e: KeyboardEvent) {
+		// Skip all canvas shortcuts while fullscreen is active
+		if (isFullscreen()) return;
+
 		const target = e.target as HTMLElement;
 		const editableTarget = isEditableTarget(target);
 		const terminalTarget = isTerminalTarget(target);
 		const primaryModifierPressed = isApplePlatform
 			? e.metaKey && !e.ctrlKey
 			: e.ctrlKey && !e.metaKey;
+
+		// Cmd+Enter → enter fullscreen for active terminal
+		if (primaryModifierPressed && e.key === 'Enter' && !e.altKey && !e.shiftKey) {
+			if (editableTarget && !terminalTarget) return;
+			const targetId = activeNodeId ?? getTerminalNodeIds()[0];
+			if (!targetId) return;
+			e.preventDefault();
+			enterFullscreenForNode(targetId);
+			return;
+		}
 
 		if (primaryModifierPressed && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
 			if (editableTarget && !terminalTarget) return;
@@ -297,6 +396,32 @@
 			return;
 		}
 
+		// Cmd+= / Cmd+- / Cmd+0 → canvas zoom
+		if (primaryModifierPressed && !e.altKey && !e.shiftKey) {
+			if (e.key === '=' || e.key === '+') {
+				e.preventDefault();
+				viewportController?.zoomIn();
+				return;
+			}
+			if (e.key === '-') {
+				e.preventDefault();
+				viewportController?.zoomOut();
+				return;
+			}
+			if (e.key === '0') {
+				e.preventDefault();
+				viewportController?.zoomReset();
+				return;
+			}
+		}
+
+		// Esc cancels placement mode
+		if (e.key === 'Escape' && placementMode) {
+			e.preventDefault();
+			cancelPlacement();
+			return;
+		}
+
 		if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
 		if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
 			e.preventDefault();
@@ -313,6 +438,8 @@
 		isApplePlatform = detectApplePlatform();
 		window.addEventListener('devcanvas:remove-node', handleRemoveNode);
 		window.addEventListener('devcanvas:update-node', handleUpdateNode);
+		window.addEventListener('devcanvas:add-terminal-node', handleAddTerminalEvent);
+		window.addEventListener('devcanvas:add-task-board', handleAddTaskBoardEvent);
 		window.addEventListener(TERMINAL_INTERACTION_EVENT, handleTerminalInteraction);
 		window.addEventListener('keydown', handleKeydown, true);
 		// Capture initial empty state
@@ -323,6 +450,8 @@
 		clearTimeout(saveTimer);
 		window.removeEventListener('devcanvas:remove-node', handleRemoveNode);
 		window.removeEventListener('devcanvas:update-node', handleUpdateNode);
+		window.removeEventListener('devcanvas:add-terminal-node', handleAddTerminalEvent);
+		window.removeEventListener('devcanvas:add-task-board', handleAddTaskBoardEvent);
 		window.removeEventListener('keydown', handleKeydown, true);
 		window.removeEventListener(TERMINAL_INTERACTION_EVENT, handleTerminalInteraction);
 		resetTerminalNavigation();
@@ -348,11 +477,36 @@
 		scheduleSave();
 	}
 
-	export function addNoteNode() {
+	export async function addTaskBoardNode() {
+		const boardId = taskBoardNodeId();
+		const existing = nodes.find((node) => isTaskBoardNode(node));
+		if (existing) {
+			await viewportController?.focusNode(existing.id);
+			return;
+		}
+
+		const nextNode: Node = {
+			id: boardId,
+			type: 'task-board',
+			position: { x: 160, y: 120 },
+			data: { workspaceId },
+			style: 'width:1120px;height:680px;',
+			draggable: true,
+			dragHandle: TASK_BOARD_DRAG_HANDLE,
+		};
+
+		nodes = [...nodes, decorateNode(nextNode)];
+		pushHistory();
+		scheduleSave();
+		await tick();
+		await viewportController?.focusNode(boardId);
+	}
+
+	function addNoteNodeAt(x: number, y: number) {
 		const nextNode: Node = {
 			id: `note-${Date.now()}`,
 			type: 'note',
-			position: { x: 120 + nodes.length * 25, y: 120 + nodes.length * 25 },
+			position: { x, y },
 			data: { content: '' },
 			style: 'width:280px;height:200px;',
 		};
@@ -362,6 +516,10 @@
 		];
 		pushHistory();
 		scheduleSave();
+	}
+
+	export function addNoteNode() {
+		startNotePlacement();
 	}
 
 	export async function loadSnapshot(snapshot: CanvasSnapshot) {
@@ -400,7 +558,13 @@
 	}
 </script>
 
-<div class="w-full h-full" style="--flow-zoom:{viewport.zoom}">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+	class="w-full h-full"
+	class:placement-active={!!placementMode}
+	style="--flow-zoom:{viewport.zoom}"
+	onmousemove={handlePlacementMouseMove}
+>
 	<SvelteFlow
 		bind:nodes
 		bind:edges
@@ -422,6 +586,7 @@
 		connectionMode={ConnectionMode.Loose}
 		onmoveend={handleMoveEnd}
 		onnodedragstop={handleDragStop}
+		onpaneclick={handlePaneClick}
 	>
 		<FlowViewportController bind:this={viewportController} />
 
@@ -435,10 +600,23 @@
 		<Controls position="bottom-right" />
 	</SvelteFlow>
 
-	{#if nodes.length === 0}
+	{#if nodes.length === 0 && !placementMode}
 		<div class="absolute inset-0 flex flex-col items-center justify-center text-[#6b6b80] text-[13px] pointer-events-none select-none gap-1.5">
 			<p class="m-0">Arrastra sesiones desde el sidebar</p>
 			<p class="m-0"><kbd class="bg-[#1c1c22] border border-[#2a2a35] rounded px-1.5 py-px font-mono text-[11px] text-[#9575ff]">T</kbd> terminal &nbsp;·&nbsp; <kbd class="bg-[#1c1c22] border border-[#2a2a35] rounded px-1.5 py-px font-mono text-[11px] text-[#9575ff]">N</kbd> nota &nbsp;·&nbsp; <kbd class="bg-[#1c1c22] border border-[#2a2a35] rounded px-1.5 py-px font-mono text-[11px] text-[#9575ff]">{slotShortcutHint}</kbd> terminal &nbsp;·&nbsp; <kbd class="bg-[#1c1c22] border border-[#2a2a35] rounded px-1.5 py-px font-mono text-[11px] text-[#9575ff]">{cycleShortcutHint}</kbd> iterar</p>
+		</div>
+	{/if}
+
+	{#if placementMode && ghostScreenPos}
+		<div
+			class="placement-ghost"
+			style="left:{ghostScreenPos.x}px;top:{ghostScreenPos.y}px"
+		>
+			<div class="placement-ghost-card">
+				<div class="placement-ghost-accent"></div>
+				<span class="placement-ghost-text">// notes...</span>
+			</div>
+			<span class="placement-ghost-hint">clic para colocar · esc cancelar</span>
 		</div>
 	{/if}
 </div>
@@ -474,5 +652,71 @@
 
 	:global(.svelte-flow__node.selected > *) {
 		box-shadow: 0 0 0 1px #7c5cfc55 !important;
+	}
+
+	/* ─── Placement mode ─────────────────────────────────────────── */
+	.placement-active {
+		cursor: crosshair;
+	}
+
+	.placement-active :global(.svelte-flow__pane) {
+		cursor: crosshair;
+	}
+
+	.placement-ghost {
+		position: fixed;
+		pointer-events: none;
+		z-index: 50;
+		transform: translate(16px, 16px);
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		animation: ghost-in 120ms ease-out;
+	}
+
+	@keyframes ghost-in {
+		from { opacity: 0; transform: translate(16px, 20px); }
+		to   { opacity: 1; transform: translate(16px, 16px); }
+	}
+
+	.placement-ghost-card {
+		width: 200px;
+		height: 120px;
+		background: rgba(20, 20, 24, 0.72);
+		border: 1px solid rgba(149, 117, 255, 0.28);
+		border-radius: 8px;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		box-shadow:
+			0 12px 32px rgba(0, 0, 0, 0.3),
+			0 0 0 1px rgba(124, 92, 252, 0.12);
+		backdrop-filter: blur(8px);
+	}
+
+	.placement-ghost-accent {
+		height: 2px;
+		background: #f1c40f;
+		flex-shrink: 0;
+	}
+
+	.placement-ghost-text {
+		padding: 10px 12px;
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 11px;
+		color: rgba(42, 42, 53, 0.8);
+	}
+
+	.placement-ghost-hint {
+		font-family: 'JetBrains Mono', monospace;
+		font-size: 10px;
+		color: #6b6b80;
+		white-space: nowrap;
+		padding: 3px 8px;
+		background: rgba(20, 20, 28, 0.78);
+		border: 1px solid rgba(255, 255, 255, 0.06);
+		border-radius: 999px;
+		width: fit-content;
+		backdrop-filter: blur(6px);
 	}
 </style>

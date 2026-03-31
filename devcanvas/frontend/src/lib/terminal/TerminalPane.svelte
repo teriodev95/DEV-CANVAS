@@ -11,6 +11,7 @@
 		type TerminalFontFamilyId,
 		type TerminalThemeId,
 	} from '$lib/terminal/settings';
+	import { acquireInputLock, type InputLockHandle } from '$lib/terminal/input-lock';
 
 	interface Props {
 		sessionId: string;
@@ -46,6 +47,7 @@
 	let fitAddon: XTermFitAddon | null = $state(null);
 
 	let ws: BufferedReconnectingWebSocket | null = null;
+	let inputLock: InputLockHandle | null = null;
 	let shouldRefocus = false;
 	let focusTerminal = () => {};
 	let sendInput = (_data: string) => {};
@@ -79,13 +81,19 @@
 		shouldRefocus = false;
 	}
 
+	export function reconnect() {
+		term?.clear();
+		ws?.reconnect();
+	}
+
 	function getNativeInputTarget() {
 		return term?.textarea ?? null;
 	}
 
 	function shouldUseWrapperInputFallback() {
 		const nativeInput = getNativeInputTarget();
-		return !!paneEl && document.activeElement === paneEl && !nativeInput;
+		if (nativeInput && document.contains(nativeInput)) return false;
+		return !!paneEl && document.activeElement === paneEl;
 	}
 
 	onMount(() => {
@@ -120,8 +128,10 @@
 			term.loadAddon(fitAddon);
 			term.loadAddon(webLinksAddon);
 
+			inputLock = acquireInputLock(sessionId);
+
 			sendInput = (data: string) => {
-				if (!sessionReady) return;
+				if (!sessionReady || !inputLock?.isOwner()) return;
 				ws?.send({
 					type: 'terminal:input',
 					id: nextMessageId('input'),
@@ -254,6 +264,8 @@
 				window.removeEventListener('focus', handleWindowFocus);
 				window.removeEventListener('resize', sendResize);
 				resizeObserver?.disconnect();
+				inputLock?.release();
+				inputLock = null;
 				ws?.destroy();
 				ws = null;
 				term?.dispose();
@@ -495,26 +507,9 @@
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 	}
 
-	/*
-	 * Counter-transform for SvelteFlow zoom.
-	 *
-	 * SvelteFlow applies `transform: scale(zoom)` on the viewport.  xterm.js
-	 * computes mouse → cell coordinates by dividing screen-pixel offsets by
-	 * CSS-pixel cell dimensions, which diverge under a CSS scale → selection
-	 * appears shifted vertically.
-	 *
-	 * Fix: scale the terminal host by `1/zoom` (cancelling the viewport zoom)
-	 * and enlarge CSS dimensions by `zoom` so the element still fills its
-	 * parent visually.  The result is 1:1 CSS↔screen pixels inside the
-	 * terminal, making xterm coordinate math correct at every zoom level.
-	 *
-	 * --flow-zoom is set on CanvasEditor's wrapper and inherited via CSS.
-	 */
 	.embedded .terminal-host {
-		transform: scale(calc(1 / var(--flow-zoom, 1)));
-		transform-origin: top left;
-		width: calc(100% * var(--flow-zoom, 1));
-		height: calc(100% * var(--flow-zoom, 1));
+		width: 100%;
+		height: 100%;
 	}
 
 	.embedded .terminal-stage {

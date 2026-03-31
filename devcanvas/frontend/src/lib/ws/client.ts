@@ -110,6 +110,18 @@ export class BufferedReconnectingWebSocket {
 		return this.ws?.readyState === WebSocket.OPEN;
 	}
 
+	public reconnect() {
+		if (this.destroyed) return;
+		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+		if (this.outputTimer) clearTimeout(this.outputTimer);
+		this.outputBuffer = [];
+		this.outputTimer = null;
+		this.reconnectAttempt = 0;
+		this.ws?.close();
+		this.ws = null;
+		this.connect();
+	}
+
 	public destroy() {
 		this.destroyed = true;
 		if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "bun --hot run src/index.ts",
     "start": "bun run src/index.ts",
+    "mcp:tasks": "../scripts/mcp-tasks.sh",
     "typecheck": "tsc --noEmit",
     "build:bin": "bun build --compile --target=bun --outfile=../frontend/src-tauri/binaries/devcanvas-backend src/index.ts"
   },
@@ -16,6 +17,7 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.19.1",
     "@hono/node-server": "^1.19.11",
     "hono": "^4.12.9"
   }

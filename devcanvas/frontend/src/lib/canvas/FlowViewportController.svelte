@@ -7,7 +7,11 @@
 	const FIT_PADDING = 0.16;
 	const LOAD_DURATION_MS = 0;
 
-	const { getNode, getNodesBounds, getViewport, setCenter, setViewport, fitView } = useSvelteFlow();
+	const { getNode, getNodesBounds, getViewport, setCenter, setViewport, fitView, screenToFlowPosition } = useSvelteFlow();
+
+	export function screenToFlow(point: { x: number; y: number }): { x: number; y: number } {
+		return screenToFlowPosition(point);
+	}
 
 	function getVisibleFlowRect() {
 		const viewport = getViewport();
@@ -64,5 +68,29 @@
 			duration: LOAD_DURATION_MS,
 			maxZoom: 1.2,
 		});
+	}
+
+	export function zoomTo(zoom: number) {
+		const vp = getViewport();
+		// Zoom toward center of screen
+		const cx = window.innerWidth / 2;
+		const cy = window.innerHeight / 2;
+		const oldZoom = vp.zoom;
+		const clampedZoom = Math.max(0.2, Math.min(2, zoom));
+		const newX = cx - (cx - vp.x) * (clampedZoom / oldZoom);
+		const newY = cy - (cy - vp.y) * (clampedZoom / oldZoom);
+		setViewport({ x: newX, y: newY, zoom: clampedZoom }, { duration: 120 });
+	}
+
+	export function zoomIn() {
+		zoomTo(getViewport().zoom * 1.2);
+	}
+
+	export function zoomOut() {
+		zoomTo(getViewport().zoom / 1.2);
+	}
+
+	export function zoomReset() {
+		zoomTo(1);
 	}
 </script>
