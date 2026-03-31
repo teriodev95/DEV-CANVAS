@@ -400,7 +400,7 @@
 	}
 </script>
 
-<div class="w-full h-full">
+<div class="w-full h-full" style="--flow-zoom:{viewport.zoom}">
 	<SvelteFlow
 		bind:nodes
 		bind:edges

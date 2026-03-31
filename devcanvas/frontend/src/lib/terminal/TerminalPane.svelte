@@ -495,6 +495,28 @@
 		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 	}
 
+	/*
+	 * Counter-transform for SvelteFlow zoom.
+	 *
+	 * SvelteFlow applies `transform: scale(zoom)` on the viewport.  xterm.js
+	 * computes mouse → cell coordinates by dividing screen-pixel offsets by
+	 * CSS-pixel cell dimensions, which diverge under a CSS scale → selection
+	 * appears shifted vertically.
+	 *
+	 * Fix: scale the terminal host by `1/zoom` (cancelling the viewport zoom)
+	 * and enlarge CSS dimensions by `zoom` so the element still fills its
+	 * parent visually.  The result is 1:1 CSS↔screen pixels inside the
+	 * terminal, making xterm coordinate math correct at every zoom level.
+	 *
+	 * --flow-zoom is set on CanvasEditor's wrapper and inherited via CSS.
+	 */
+	.embedded .terminal-host {
+		transform: scale(calc(1 / var(--flow-zoom, 1)));
+		transform-origin: top left;
+		width: calc(100% * var(--flow-zoom, 1));
+		height: calc(100% * var(--flow-zoom, 1));
+	}
+
 	.embedded .terminal-stage {
 		padding: 0;
 	}
