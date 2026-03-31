@@ -1,4 +1,10 @@
 <script lang="ts">
+	import { getWorkspaceIcon } from '$lib/terminal/icons';
+	import {
+		getDefaultWorkspaceSettings,
+		getTerminalColor,
+		normalizeWorkspaceSettings,
+	} from '$lib/terminal/settings';
 	import type { Workspace } from '$lib/stores/workspace';
 
 	type Props = {
@@ -7,6 +13,7 @@
 	};
 
 	let { workspace, onclick }: Props = $props();
+	const defaultWorkspaceSettings = getDefaultWorkspaceSettings();
 
 	function formatDate(dateStr: string): string {
 		try {
@@ -24,22 +31,15 @@
 		} catch { return dateStr; }
 	}
 
-	function nameHue(name: string): number {
-		let h = 0;
-		for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) & 0xffffffff;
-		return Math.abs(h) % 360;
-	}
-
-	const initials = $derived(
-		workspace.name.split(/[\s\-_]+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
+	const workspaceSettings = $derived(
+		normalizeWorkspaceSettings(workspace.settings ?? defaultWorkspaceSettings)
 	);
-	const hue = $derived(nameHue(workspace.name));
-	const avatarGradient = $derived(
-		`linear-gradient(135deg, hsl(${hue},55%,28%), hsl(${(hue + 40) % 360},65%,20%))`
-	);
+	const workspaceColor = $derived(getTerminalColor(workspaceSettings.appearance.color));
+	const workspaceIcon = $derived(getWorkspaceIcon(workspaceSettings.appearance.icon));
+	const WorkspaceIcon = $derived(workspaceIcon.component);
 </script>
 
-<button class="card fade-in" {onclick}>
+<button class="card fade-in" type="button" {onclick}>
 	<!-- Session count -->
 	{#if workspace.sessionCount !== undefined && workspace.sessionCount > 0}
 		<span class="session-badge">{workspace.sessionCount}</span>
@@ -47,7 +47,12 @@
 
 	<!-- Header -->
 	<div class="card-head">
-		<div class="avatar" style="background: {avatarGradient}">{initials}</div>
+		<div
+			class="avatar"
+			style={`--avatar-bar:${workspaceColor.bar}; --avatar-dot:${workspaceColor.dot}; --avatar-border:${workspaceColor.border};`}
+		>
+			<WorkspaceIcon size={18} strokeWidth={1.9} />
+		</div>
 		<div class="card-meta">
 			<span class="ws-name">{workspace.name}</span>
 			<span class="ws-date">{formatDate(workspace.updatedAt ?? workspace.createdAt)}</span>
@@ -111,16 +116,18 @@
 		width: 36px;
 		height: 36px;
 		border-radius: 8px;
-		border: 1px solid rgba(255, 255, 255, 0.07);
 		display: flex;
 		align-items: center;
 		justify-content: center;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 13px;
-		font-weight: 600;
-		color: rgba(255, 255, 255, 0.85);
+		color: var(--avatar-dot);
+		background:
+			linear-gradient(180deg, rgba(255, 255, 255, 0.08), transparent 78%),
+			var(--avatar-bar);
+		border: 1px solid color-mix(in srgb, var(--avatar-border) 72%, rgba(255, 255, 255, 0.08));
+		box-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.04),
+			0 8px 18px rgba(0, 0, 0, 0.16);
 		flex-shrink: 0;
-		letter-spacing: 0.5px;
 	}
 
 	.card-meta {

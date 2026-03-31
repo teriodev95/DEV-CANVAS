@@ -89,7 +89,7 @@ class TmuxControlClient {
    * Returns false if the control client is not ready (caller should fall back).
    */
   sendKeys(target: string, data: string): boolean {
-    if (!this.connected || !this.proc?.stdin) return false
+    if (!this.connected || !this.proc?.stdin || typeof this.proc.stdin === 'number') return false
     try {
       this.proc.stdin.write(`send-keys -t ${quote(target)} -l ${quote(data)}\n`)
       return true
@@ -120,7 +120,7 @@ class TmuxControlClient {
    */
   private drainStdout(): void {
     const stdout = this.proc?.stdout
-    if (!stdout) return
+    if (!stdout || typeof stdout === 'number') return
 
     ;(async () => {
       const reader = stdout.getReader()

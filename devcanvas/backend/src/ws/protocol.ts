@@ -6,6 +6,7 @@ export interface SessionInfo {
   status: string
   createdAt: number
   lastActivity: number
+  workingDir?: string | null
 }
 
 export type WSMessage =
@@ -24,6 +25,8 @@ export type WSMessage =
 export type ServerMessage =
   | { type: 'session:created'; id: string; sessionId: string; name: string }
   | { type: 'session:list:response'; id: string; sessions: SessionInfo[] }
+  | { type: 'session:ready'; id?: string; sessionId: string }
+  | { type: 'session:cwd'; sessionId: string; workingDir: string }
   | { type: 'terminal:output'; sessionId: string; data: string; sequence: number; timestamp: number }
   | { type: 'pong'; id: string }
   | { type: 'error'; id?: string; code: string; message: string }

@@ -1,11 +1,25 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { logger } from 'hono/logger'
-import { getDb, insertWorkspace, getWorkspaces, insertSession, getSessions } from './db'
+import {
+  getDb,
+  getDefaultWorkspaceSettings,
+  insertWorkspace,
+  getWorkspaces,
+  getSessions,
+  serializeWorkspaceSettings,
+  updateSessionStatus,
+  updateSessionWorkingDir,
+} from './db'
 import { workspaces } from './routes/workspaces'
 import { sessions } from './routes/sessions'
+import { connections } from './routes/connections'
 import { wsHandler, type WsData } from './ws/handler'
-import { isTmuxAvailable, listSessions as tmuxListSessions, createSession as tmuxCreateSession } from './services/tmux'
+import {
+  isTmuxAvailable,
+  listSessions as tmuxListSessions,
+  getSessionWorkingDirectory as getTmuxWorkingDirectory,
+} from './services/tmux'
 import { tmuxControl } from './services/tmux-control'
 
 // ---------------------------------------------------------------------------
@@ -14,14 +28,18 @@ import { tmuxControl } from './services/tmux-control'
 
 const app = new Hono()
 
-// CORS — allow local and Tailscale origins
+// CORS — allow all local origins (localhost, 127.0.0.1, tauri.localhost)
 app.use(
   '*',
   cors({
     origin: (origin) => {
       if (!origin) return '*'
-      // Allow localhost and any Tailscale 100.x.x.x IP
-      if (origin.includes('localhost') || origin.match(/^https?:\/\/100\.\d+\.\d+\.\d+/)) {
+      // Allow any localhost variant or loopback IP
+      if (
+        origin.includes('localhost') ||
+        origin.includes('127.0.0.1') ||
+        origin.startsWith('tauri://')
+      ) {
         return origin
       }
       return null
@@ -52,6 +70,7 @@ app.get('/health', async (c) => {
 
 app.route('/api/workspaces', workspaces)
 app.route('/api/sessions', sessions)
+app.route('/api/connections', connections)
 
 // 404 fallback for unmatched API routes
 app.notFound((c) => {
@@ -88,6 +107,7 @@ async function startup() {
       id: crypto.randomUUID(),
       name: 'Default Workspace',
       canvas_snapshot: '{}',
+      settings_json: serializeWorkspaceSettings(getDefaultWorkspaceSettings()),
       created_at: now,
       updated_at: now,
     }
@@ -101,35 +121,28 @@ async function startup() {
     try {
       const liveTmuxSessions = await tmuxListSessions()
       const dbSessions = getSessions()
-      const dbSessionNames = new Set(dbSessions.map((s) => s.name))
-
-      // Find a workspace to attach orphaned sessions to
-      const defaultWorkspace = getWorkspaces()[0]
-      if (!defaultWorkspace) throw new Error('No workspace found after creation')
-
-      for (const tmuxName of liveTmuxSessions) {
-        if (!dbSessionNames.has(tmuxName)) {
-          console.log(`[startup] Restoring orphaned tmux session: ${tmuxName}`)
-          const now = Date.now()
-          insertSession({
-            id: crypto.randomUUID(),
-            workspace_id: defaultWorkspace.id,
-            name: tmuxName,
-            type: 'tmux',
-            status: 'active',
-            created_at: now,
-            last_activity: now,
-          })
-        }
-      }
 
       // Mark DB sessions as inactive if their tmux session no longer exists
       const liveTmuxSet = new Set(liveTmuxSessions)
       for (const session of dbSessions) {
-        if (session.type === 'tmux' && session.status === 'active' && !liveTmuxSet.has(session.name)) {
+        if (session.type !== 'tmux') continue
+
+        if (liveTmuxSet.has(session.name) && session.status !== 'active') {
+          console.log(`[startup] Restoring live tmux session as active: ${session.name}`)
+          updateSessionStatus(session.id, 'active', Date.now())
+        }
+
+        if (session.status === 'active' && !liveTmuxSet.has(session.name)) {
           console.log(`[startup] Marking stale session as inactive: ${session.name}`)
-          const { updateSessionStatus } = await import('./db')
           updateSessionStatus(session.id, 'inactive', Date.now())
+          continue
+        }
+
+        if (liveTmuxSet.has(session.name)) {
+          const workingDir = await getTmuxWorkingDirectory(session.name)
+          if (workingDir) {
+            updateSessionWorkingDir(session.id, workingDir, Date.now())
+          }
         }
       }
     } catch (err) {
@@ -144,7 +157,7 @@ async function startup() {
 // Server
 // ---------------------------------------------------------------------------
 
-const PORT = Number(process.env.PORT ?? 3001)
+const PORT = Number(process.env.PORT ?? 39471)
 
 // Run startup tasks, then start the server
 startup()

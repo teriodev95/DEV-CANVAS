@@ -2,54 +2,54 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import WorkspaceCard from '$lib/components/WorkspaceCard.svelte';
+	import CreateWorkspaceModal from '$lib/components/CreateWorkspaceModal.svelte';
 	import { api } from '$lib/api';
 	import type { Workspace } from '$lib/stores/workspace';
 
 	let workspaces = $state<Workspace[]>([]);
 	let loading = $state(true);
 	let showCreateModal = $state(false);
-	let newWorkspaceName = $state('');
-	let creating = $state(false);
+	let loadError = $state<string | null>(null);
 
-	function focusOnMount(node: HTMLElement) { node.focus(); }
+	async function loadWorkspaces() {
+		loading = true;
+		loadError = null;
 
-	onMount(async () => {
 		try {
-			const data = await api.workspaces.list();
-			workspaces = Array.isArray(data) ? data : (data.workspaces ?? []);
-		} catch {
-			workspaces = [
-				{ id: 'demo-1', name: 'my-project',   createdAt: new Date(Date.now() - 86400000 * 2).toISOString(), updatedAt: new Date(Date.now() - 3600000).toISOString(),    sessionCount: 3 },
-				{ id: 'demo-2', name: 'infra-setup',  createdAt: new Date(Date.now() - 86400000 * 5).toISOString(), updatedAt: new Date(Date.now() - 86400000).toISOString(),   sessionCount: 1 },
-			];
+			for (let attempt = 0; attempt < 8; attempt += 1) {
+				try {
+					const data = await api.workspaces.list();
+					workspaces = Array.isArray(data) ? data : ((data as { workspaces?: Workspace[] })?.workspaces ?? []);
+					loadError = null;
+					return;
+				} catch (error) {
+					if (attempt === 7) {
+						workspaces = [];
+						loadError =
+							error instanceof Error ? error.message : 'No se pudieron cargar los workspaces';
+						return;
+					}
+
+					await new Promise((resolve) =>
+						setTimeout(resolve, Math.min(250 * 2 ** attempt, 1400))
+					);
+				}
+			}
 		} finally {
 			loading = false;
 		}
-	});
-
-	async function createWorkspace() {
-		if (!newWorkspaceName.trim() || creating) return;
-		creating = true;
-		try {
-			const workspace = await api.workspaces.create(newWorkspaceName.trim());
-			workspaces = [...workspaces, workspace];
-			showCreateModal = false;
-			newWorkspaceName = '';
-			goto(`/workspace/${workspace.id}`);
-		} catch {
-			const demoId = `demo-${Date.now()}`;
-			workspaces = [...workspaces, { id: demoId, name: newWorkspaceName.trim(), createdAt: new Date().toISOString(), sessionCount: 0 }];
-			showCreateModal = false;
-			newWorkspaceName = '';
-			goto(`/workspace/${demoId}`);
-		} finally {
-			creating = false;
-		}
 	}
 
+	onMount(() => {
+		void loadWorkspaces();
+	});
+
 	function openCreate() {
-		newWorkspaceName = '';
 		showCreateModal = true;
+	}
+
+	function handleWorkspaceCreated(workspace: Workspace) {
+		workspaces = [workspace, ...workspaces.filter((item) => item.id !== workspace.id)];
 	}
 </script>
 
@@ -83,6 +83,21 @@
 					<div class="skeleton"></div>
 				{/each}
 			</div>
+		{:else if loadError}
+			<div class="empty">
+				<div class="empty-terminal">
+					<span class="et-path">~/devcanvas</span>
+					<span class="et-prompt"> $ </span>
+					<span class="et-cmd">backend status</span>
+					<br />
+					<span class="et-dim">{loadError}</span>
+					<br />
+					<span class="et-prompt">$ </span><span class="et-cursor"></span>
+				</div>
+				<h2 class="empty-title">No se pudo conectar al backend</h2>
+				<p class="empty-body">DevCanvas espera a que el sidecar local responda antes de mostrar workspaces reales.</p>
+				<button class="btn-cta" onclick={loadWorkspaces}>Reintentar</button>
+			</div>
 		{:else if workspaces.length === 0}
 			<div class="empty">
 				<div class="empty-terminal">
@@ -108,51 +123,11 @@
 	</main>
 </div>
 
-<!-- Create workspace modal -->
-{#if showCreateModal}
-	<div
-		class="backdrop"
-		role="dialog"
-		aria-modal="true"
-		tabindex="-1"
-		onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
-		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
-	>
-		<div
-			class="modal"
-			role="presentation"
-			onclick={(e) => e.stopPropagation()}
-			onkeydown={(e) => e.key === 'Enter' && createWorkspace()}
-		>
-			<div class="modal-header">
-				<h2 class="modal-title">New Workspace</h2>
-				<p class="modal-sub">An infinite canvas for your terminals and notes.</p>
-			</div>
-
-			<div class="modal-body">
-				<label class="field">
-					<span class="field-label">Name</span>
-					<input
-						class="field-input"
-						type="text"
-						bind:value={newWorkspaceName}
-						placeholder="my-project"
-						use:focusOnMount
-					/>
-				</label>
-			</div>
-
-			<div class="modal-foot">
-				<button class="btn-ghost" onclick={() => (showCreateModal = false)}>Cancel</button>
-				<button
-					class="btn-primary"
-					onclick={createWorkspace}
-					disabled={creating || !newWorkspaceName.trim()}
-				>{creating ? 'Creating…' : 'Create'}</button>
-			</div>
-		</div>
-	</div>
-{/if}
+<CreateWorkspaceModal
+	open={showCreateModal}
+	onclose={() => (showCreateModal = false)}
+	oncreated={handleWorkspaceCreated}
+/>
 
 <style>
 	/* ─── Page shell ─────────────────────────────── */
@@ -361,122 +336,4 @@
 	}
 	.btn-cta:hover { background: var(--accent-hover); }
 
-	/* ─── Modal ──────────────────────────────────── */
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.6);
-		backdrop-filter: blur(4px);
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.modal {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		width: 360px;
-		overflow: hidden;
-		box-shadow: 0 32px 80px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255,255,255,0.04);
-	}
-
-	.modal-header {
-		padding: 22px 22px 0;
-	}
-
-	.modal-title {
-		margin: 0 0 4px;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 15px;
-		font-weight: 600;
-		color: var(--text);
-		letter-spacing: -0.01em;
-	}
-
-	.modal-sub {
-		margin: 0;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		color: var(--muted);
-		line-height: 1.5;
-	}
-
-	.modal-body {
-		padding: 18px 22px 16px;
-	}
-
-	.field { display: block; }
-
-	.field-label {
-		display: block;
-		margin-bottom: 6px;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 10px;
-		font-weight: 600;
-		color: #4a4a60;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-	}
-
-	.field-input {
-		width: 100%;
-		padding: 9px 12px;
-		background: var(--surface2);
-		border: 1px solid var(--border);
-		border-radius: 7px;
-		color: var(--text);
-		font-family: var(--font-family-mono, monospace);
-		font-size: 13px;
-		outline: none;
-		box-sizing: border-box;
-		transition: border-color 0.15s ease, box-shadow 0.15s ease;
-	}
-	.field-input:focus {
-		border-color: var(--accent);
-		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.12);
-	}
-
-	.modal-foot {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 12px 22px;
-		border-top: 1px solid var(--border);
-		background: var(--surface2);
-	}
-
-	.btn-ghost {
-		padding: 7px 16px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		color: var(--muted);
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: border-color 0.12s, color 0.12s;
-	}
-	.btn-ghost:hover {
-		border-color: var(--muted);
-		color: var(--text);
-	}
-
-	.btn-primary {
-		padding: 7px 16px;
-		background: var(--accent);
-		border: 1px solid transparent;
-		border-radius: 6px;
-		color: #fff;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.12s ease;
-	}
-	.btn-primary:hover:not(:disabled) { background: var(--accent-hover); }
-	.btn-primary:disabled { opacity: 0.4; cursor: default; }
 </style>

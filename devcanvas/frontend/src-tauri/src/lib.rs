@@ -52,7 +52,7 @@ pub fn run() {
                 let state = app_handle.state::<BackendSidecar>();
                 if let Some(child) = state.0.lock().unwrap().take() {
                     let _ = child.kill();
-                }
+                };
             }
         });
 }

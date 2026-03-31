@@ -1,422 +1,975 @@
 <script lang="ts">
-	import SessionItem from './SessionItem.svelte';
-	import { sessions, sessionsLoading } from '$lib/stores/sessions';
-	import { terminalConfig } from '$lib/stores/terminalConfig';
+	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { api } from '$lib/api';
+	import CreateWorkspaceModal from '$lib/components/CreateWorkspaceModal.svelte';
+	import { getWorkspaceIcon, WORKSPACE_ICONS } from '$lib/terminal/icons';
+	import { currentWorkspace, type Workspace } from '$lib/stores/workspace';
+	import {
+		clampTerminalFontSize,
+		getDefaultWorkspaceSettings,
+		getTerminalColor,
+		normalizeWorkspaceSettings,
+		type TerminalColorKey,
+		TERMINAL_COLORS,
+		TERMINAL_FONT_SIZE_MAX,
+		TERMINAL_FONT_SIZE_MIN,
+		type WorkspaceIconKey,
+	} from '$lib/terminal/settings';
 
 	type Props = {
 		workspaceId: string;
-		onAddTerminal?: (sessionId: string, sessionName: string, sessionType: 'tmux' | 'pty' | 'ssh') => void;
-		onAddNote?: () => void;
 	};
 
-	let { workspaceId, onAddTerminal, onAddNote }: Props = $props();
+	let { workspaceId }: Props = $props();
 
+	let workspaces = $state<Workspace[]>([]);
+	let loading = $state(true);
+	let loadError = $state<string | null>(null);
+	let filter = $state('');
 	let showCreateModal = $state(false);
+	let menuWorkspaceId = $state<string | null>(null);
+	let savingWorkspaceId = $state<string | null>(null);
+	let deletingWorkspaceId = $state<string | null>(null);
+	let menuDeleteConfirm = $state(false);
+	let menuError = $state<string | null>(null);
+	const defaultWorkspaceSettings = getDefaultWorkspaceSettings();
 
-	function focusOnMount(node: HTMLElement) { node.focus(); }
+	const workspaceFontSize = $derived(
+		clampTerminalFontSize(
+			$currentWorkspace?.settings?.terminalDefaults.fontSize ??
+				defaultWorkspaceSettings.terminalDefaults.fontSize
+		)
+	);
 
-	// Listen for global "new session" intent (topbar button, T key fallback)
-	$effect(() => {
-		const handler = () => openCreateModal('tmux');
-		window.addEventListener('devcanvas:new-session', handler);
-		return () => window.removeEventListener('devcanvas:new-session', handler);
-	});
-
-	let createType = $state<'tmux' | 'pty' | 'ssh'>('tmux');
-	let createName = $state('');
-	let sshHost = $state('');
-	let sshUser = $state('');
-	let sshPort = $state('22');
-	let creating = $state(false);
-
-	function getDefaultName(): string {
-		const nums = $sessions
-			.filter(s => s.name.startsWith('dev-'))
-			.map(s => parseInt(s.name.replace('dev-', ''), 10))
-			.filter(n => !isNaN(n));
-		return `dev-${(nums.length > 0 ? Math.max(...nums) : 0) + 1}`;
-	}
-
-	function openCreateModal(type: 'tmux' | 'pty' | 'ssh') {
-		createType = type;
-		createName = getDefaultName();
-		sshHost = '';
-		sshUser = '';
-		sshPort = '22';
-		showCreateModal = true;
-	}
-
-	function isCreateReady(): boolean {
-		if (creating) return false;
-		if (createType === 'ssh') return sshHost.trim().length > 0 && sshUser.trim().length > 0;
-		return createName.trim().length > 0;
-	}
-
-	async function createSession() {
-		if (!isCreateReady()) return;
-		creating = true;
+	function formatRelative(dateValue: string | number | undefined): string {
+		if (!dateValue) return '';
 		try {
-			let session;
-			if (createType === 'ssh') {
-				const port = parseInt(sshPort, 10) || 22;
-				session = await api.sessions.create(workspaceId, '', 'ssh', {
-					host: sshHost.trim(),
-					user: sshUser.trim(),
-					port,
-				});
-			} else {
-				session = await api.sessions.create(workspaceId, createName.trim(), createType);
-			}
-			sessions.update(s => [...s, session]);
-			showCreateModal = false;
-			onAddTerminal?.(session.id, session.name, session.type);
-		} catch (err) {
-			console.error('Failed to create session:', err);
-		} finally {
-			creating = false;
+			const date = new Date(dateValue);
+			const diff = Date.now() - date.getTime();
+			const mins = Math.floor(diff / 60000);
+			const hours = Math.floor(diff / 3600000);
+			const days = Math.floor(diff / 86400000);
+			if (mins < 1) return 'just now';
+			if (mins < 60) return `${mins}m ago`;
+			if (hours < 24) return `${hours}h ago`;
+			if (days < 7) return `${days}d ago`;
+			return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+		} catch {
+			return String(dateValue);
 		}
 	}
 
-	async function deleteSession(id: string) {
+	async function loadWorkspaces() {
+		loading = true;
+		loadError = null;
 		try {
-			await api.sessions.delete(id);
-			sessions.update(s => s.filter(sess => sess.id !== id));
+			workspaces = await api.workspaces.list();
 		} catch (err) {
-			console.error('Failed to delete session:', err);
+			loadError = err instanceof Error ? err.message : 'Failed to load workspaces';
+			workspaces = $currentWorkspace ? [$currentWorkspace] : [];
+		} finally {
+			loading = false;
+		}
+	}
+
+	function handleCreated(workspace: Workspace) {
+		workspaces = [workspace, ...workspaces.filter((item) => item.id !== workspace.id)];
+	}
+
+	function dismissWorkspaceMenu() {
+		if (deletingWorkspaceId) return;
+		menuWorkspaceId = null;
+		menuDeleteConfirm = false;
+		menuError = null;
+	}
+
+	function openWorkspaceMenu(event: MouseEvent, workspaceId: string) {
+		event.preventDefault();
+		event.stopPropagation();
+		menuWorkspaceId = workspaceId;
+		menuDeleteConfirm = false;
+		menuError = null;
+	}
+
+	function applyWorkspace(updated: Workspace) {
+		workspaces = workspaces.map((item) => (item.id === updated.id ? { ...item, ...updated } : item));
+		currentWorkspace.update((workspace) =>
+			workspace && workspace.id === updated.id ? { ...workspace, ...updated } : workspace
+		);
+	}
+
+	async function updateWorkspaceAppearance(
+		workspace: Workspace,
+		patch: { icon?: WorkspaceIconKey; color?: TerminalColorKey }
+	) {
+		if (savingWorkspaceId || deletingWorkspaceId) return;
+
+		const previousSettings = normalizeWorkspaceSettings(workspace.settings ?? defaultWorkspaceSettings);
+		const nextSettings = normalizeWorkspaceSettings({
+			...previousSettings,
+			appearance: {
+				...previousSettings.appearance,
+				...patch,
+			},
+		});
+
+		if (
+			nextSettings.appearance.icon === previousSettings.appearance.icon &&
+			nextSettings.appearance.color === previousSettings.appearance.color
+		) {
+			return;
+		}
+
+		savingWorkspaceId = workspace.id;
+		menuError = null;
+		applyWorkspace({ ...workspace, settings: nextSettings });
+
+		try {
+			const updated = await api.workspaces.updateSettings(workspace.id, nextSettings);
+			applyWorkspace(updated);
+		} catch (error) {
+			applyWorkspace({ ...workspace, settings: previousSettings });
+			menuError =
+				error instanceof Error ? error.message : 'No se pudo guardar el workspace';
+		} finally {
+			savingWorkspaceId = null;
+		}
+	}
+
+	async function confirmDeleteWorkspace(workspace: Workspace) {
+		if (deletingWorkspaceId) return;
+		deletingWorkspaceId = workspace.id;
+		menuError = null;
+
+		try {
+			await api.workspaces.delete(workspace.id);
+			const remaining = workspaces.filter((item) => item.id !== workspace.id);
+			workspaces = remaining;
+			menuWorkspaceId = null;
+			menuDeleteConfirm = false;
+			loadError = null;
+
+			if ($currentWorkspace?.id === workspace.id) {
+				currentWorkspace.set(null);
+				await goto(remaining[0] ? `/workspace/${remaining[0].id}` : '/');
+			}
+		} catch (error) {
+			menuError =
+				error instanceof Error ? error.message : 'No se pudo eliminar el workspace';
+		} finally {
+			deletingWorkspaceId = null;
+		}
+	}
+
+	const visibleWorkspaces = $derived.by(() => {
+		const q = filter.trim().toLowerCase();
+		const merged = workspaces.map((workspace) => {
+			if ($currentWorkspace && workspace.id === $currentWorkspace.id) {
+				return {
+					...workspace,
+					name: $currentWorkspace.name,
+					updatedAt: $currentWorkspace.updatedAt ?? workspace.updatedAt,
+					settings: $currentWorkspace.settings ?? workspace.settings,
+				};
+			}
+			return workspace;
+		});
+		if (!q) return merged;
+		return merged.filter((workspace) => workspace.name.toLowerCase().includes(q));
+	});
+
+	onMount(() => {
+		void loadWorkspaces();
+	});
+
+	async function changeWorkspaceFontSize(delta: number) {
+		const workspace = $currentWorkspace;
+		if (!workspace) return;
+
+		const previousSettings = normalizeWorkspaceSettings(workspace.settings ?? defaultWorkspaceSettings);
+		const nextSettings = normalizeWorkspaceSettings({
+			...previousSettings,
+			terminalDefaults: {
+				...previousSettings.terminalDefaults,
+				fontSize: previousSettings.terminalDefaults.fontSize + delta,
+			},
+		});
+
+		if (nextSettings.terminalDefaults.fontSize === previousSettings.terminalDefaults.fontSize) return;
+
+		currentWorkspace.update((current) =>
+			current && current.id === workspace.id
+				? { ...current, settings: nextSettings }
+				: current
+		);
+
+		try {
+			const updated = await api.workspaces.updateSettings(workspace.id, nextSettings);
+			currentWorkspace.set(updated);
+			workspaces = workspaces.map((item) =>
+				item.id === updated.id ? { ...item, settings: updated.settings } : item
+			);
+			loadError = null;
+		} catch (error) {
+			currentWorkspace.update((current) =>
+				current && current.id === workspace.id
+					? { ...current, settings: previousSettings }
+					: current
+			);
+			loadError = error instanceof Error ? error.message : 'Failed to save workspace settings';
 		}
 	}
 </script>
 
-<aside class="sidebar">
+<svelte:window
+	onclick={dismissWorkspaceMenu}
+	onkeydown={(event) => event.key === 'Escape' && dismissWorkspaceMenu()}
+/>
 
-	<!-- Section header -->
-	<div class="section-head">
-		<div class="section-left">
-			<span class="section-title">Sessions</span>
-			{#if $sessions.length > 0}
-				<span class="count">{$sessions.length}</span>
-			{/if}
-		</div>
-		<div class="section-actions">
-			<button class="action-btn" onclick={() => openCreateModal('tmux')} title="New tmux session">
-				+ tmux
-			</button>
-			<span class="action-sep">·</span>
-			<button class="action-btn action-btn--pty" onclick={() => openCreateModal('pty')} title="New local shell session">
-				+ pty
-			</button>
-			<span class="action-sep">·</span>
-			<button class="action-btn action-btn--ssh" onclick={() => openCreateModal('ssh')} title="New SSH session">
-				+ ssh
+<aside class="sidebar">
+	<div class="sidebar-top">
+		<div class="title-row">
+			<div class="title-group">
+				<span class="section-title">Workspaces</span>
+				<span class="count">{workspaces.length}</span>
+			</div>
+			<button class="action-btn" onclick={() => (showCreateModal = true)} title="New workspace">
+				<svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+					<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+				</svg>
 			</button>
 		</div>
+
+		<label class="filter">
+			<svg class="filter-icon" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+				<circle cx="5.2" cy="5.2" r="3.6" stroke="currentColor" stroke-width="1.2"/>
+				<path d="M8.2 8.2L10.8 10.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+			</svg>
+			<input class="filter-input" type="text" bind:value={filter} placeholder="Filter" />
+		</label>
 	</div>
 
-	<!-- Session list -->
 	<div class="list-area">
-		{#if $sessionsLoading}
-			{#each { length: 3 } as _, i}
-				<div class="skeleton" style="opacity: {1 - i * 0.2}"></div>
+		{#if loading}
+			{#each { length: 4 } as _, i}
+				<div class="skeleton" style="opacity: {1 - i * 0.14}"></div>
 			{/each}
-		{:else if $sessions.length === 0}
+		{:else if visibleWorkspaces.length === 0}
 			<div class="empty">
-				<svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-					<rect x="2" y="2" width="16" height="12" rx="2" stroke="currentColor" stroke-width="1.2"/>
-					<path d="M6 18h8M10 14v4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
-					<path d="M5 8l3 2-3 2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
-				</svg>
-				<span>No sessions</span>
+				<span>{filter.trim() ? 'No matching workspaces' : 'No workspaces yet'}</span>
 			</div>
 		{:else}
-			{#each $sessions as session (session.id)}
-				<SessionItem
-					{session}
-					onclick={() => onAddTerminal?.(session.id, session.name, session.type)}
-					ondelete={() => deleteSession(session.id)}
-				/>
+			{#each visibleWorkspaces as workspace (workspace.id)}
+				{@const workspaceSettings = normalizeWorkspaceSettings(
+					workspace.settings ?? defaultWorkspaceSettings
+				)}
+				{@const workspaceColor = getTerminalColor(workspaceSettings.appearance.color)}
+				{@const workspaceIcon = getWorkspaceIcon(workspaceSettings.appearance.icon)}
+				{@const WorkspaceIcon = workspaceIcon.component}
+				<div class="workspace-stack">
+					<button
+						class="workspace-item"
+						type="button"
+						class:active={workspace.id === workspaceId}
+						onclick={() => workspace.id !== workspaceId && goto(`/workspace/${workspace.id}`)}
+						oncontextmenu={(event) => openWorkspaceMenu(event, workspace.id)}
+						title="Click derecho para opciones"
+					>
+						<div
+							class="workspace-avatar"
+							style={`--avatar-bar:${workspaceColor.bar}; --avatar-dot:${workspaceColor.dot}; --avatar-border:${workspaceColor.border};`}
+						>
+							<WorkspaceIcon size={15} strokeWidth={1.85} />
+						</div>
+						<div class="workspace-copy">
+							<span class="workspace-name">{workspace.name}</span>
+							<span class="workspace-meta">
+								{formatRelative(workspace.updatedAt ?? workspace.createdAt)}
+							</span>
+						</div>
+						{#if workspace.sessionCount !== undefined}
+							<span class="workspace-badge">{workspace.sessionCount}</span>
+						{/if}
+					</button>
+
+					{#if menuWorkspaceId === workspace.id}
+						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_noninteractive_element_interactions -->
+						<div
+							class="workspace-menu"
+							role="dialog"
+							aria-label={`Opciones de ${workspace.name}`}
+							tabindex="-1"
+							onclick={(event) => event.stopPropagation()}
+							oncontextmenu={(event) => event.preventDefault()}
+						>
+							<div class="workspace-menu-header">
+								<div class="workspace-menu-copy">
+									<span class="workspace-menu-title">{workspace.name}</span>
+									<span class="workspace-menu-meta">Workspace</span>
+								</div>
+								{#if savingWorkspaceId === workspace.id}
+									<span class="workspace-menu-status">Guardando...</span>
+								{/if}
+							</div>
+
+							{#if menuError}
+								<p class="workspace-menu-error">{menuError}</p>
+							{/if}
+
+							<div class="workspace-menu-block">
+								<div class="workspace-menu-head">
+									<span class="workspace-menu-label">Icono</span>
+									<span class="workspace-menu-value">{workspaceIcon.label}</span>
+								</div>
+								<div class="workspace-menu-icons">
+									{#each WORKSPACE_ICONS as option}
+										{@const OptionIcon = option.component}
+										<button
+											class="workspace-menu-icon"
+											class:active={workspaceSettings.appearance.icon === option.key}
+											type="button"
+											onclick={() =>
+												void updateWorkspaceAppearance(workspace, { icon: option.key })}
+										>
+											<OptionIcon size={14} strokeWidth={1.9} />
+										</button>
+									{/each}
+								</div>
+							</div>
+
+							<div class="workspace-menu-block">
+								<div class="workspace-menu-head">
+									<span class="workspace-menu-label">Color</span>
+									<span class="workspace-menu-value">{workspaceColor.label}</span>
+								</div>
+								<div class="workspace-menu-colors">
+									{#each TERMINAL_COLORS as color}
+										<button
+											class="workspace-menu-swatch"
+											class:active={workspaceSettings.appearance.color === color.key}
+											type="button"
+											title={color.label}
+											aria-label={color.label}
+											onclick={() =>
+												void updateWorkspaceAppearance(workspace, { color: color.key })}
+										>
+											<span
+												class="workspace-menu-swatch-dot"
+												style={`--swatch:${color.dot}; --ring:${color.border};`}
+											></span>
+										</button>
+									{/each}
+								</div>
+							</div>
+
+							<div class="workspace-menu-footer">
+								{#if menuDeleteConfirm}
+									<div class="workspace-menu-confirm">
+										<span class="workspace-menu-confirm-copy">
+											También se cerrarán sus terminales.
+										</span>
+										<div class="workspace-menu-actions">
+											<button
+												class="workspace-menu-btn"
+												type="button"
+												disabled={deletingWorkspaceId === workspace.id}
+												onclick={() => {
+													menuDeleteConfirm = false;
+													menuError = null;
+												}}
+											>Cancelar</button>
+											<button
+												class="workspace-menu-btn workspace-menu-btn--danger"
+												type="button"
+												disabled={deletingWorkspaceId === workspace.id}
+												onclick={() => void confirmDeleteWorkspace(workspace)}
+											>{deletingWorkspaceId === workspace.id ? 'Eliminando...' : 'Eliminar'}</button>
+										</div>
+									</div>
+								{:else}
+									<button
+										class="workspace-menu-danger"
+										type="button"
+										onclick={() => {
+											menuDeleteConfirm = true;
+											menuError = null;
+										}}
+									>Eliminar workspace</button>
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
 			{/each}
 		{/if}
 	</div>
 
-	<!-- Footer -->
 	<div class="sidebar-foot">
-		<!-- Note + Font in one row -->
-		<div class="foot-main">
-			<button class="foot-note" onclick={() => onAddNote?.()}>
-				<svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-					<path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-				</svg>
-				Note block
-			</button>
+		{#if loadError}
+			<p class="foot-error">{loadError}</p>
+		{/if}
+
+		<div class="stepper-row">
+			<span class="stepper-label">Default font</span>
 			<div class="stepper">
 				<button
 					class="stepper-btn"
-					onclick={() => terminalConfig.setFontSize($terminalConfig.fontSize - 1)}
-					disabled={$terminalConfig.fontSize <= terminalConfig.MIN}
+					onclick={() => void changeWorkspaceFontSize(-1)}
+					disabled={workspaceFontSize <= TERMINAL_FONT_SIZE_MIN}
 					aria-label="Decrease font size"
 				>−</button>
-				<span class="stepper-val">{$terminalConfig.fontSize}</span>
+				<span class="stepper-val">{workspaceFontSize}</span>
 				<button
 					class="stepper-btn"
-					onclick={() => terminalConfig.setFontSize($terminalConfig.fontSize + 1)}
-					disabled={$terminalConfig.fontSize >= terminalConfig.MAX}
+					onclick={() => void changeWorkspaceFontSize(1)}
+					disabled={workspaceFontSize >= TERMINAL_FONT_SIZE_MAX}
 					aria-label="Increase font size"
 				>+</button>
 			</div>
 		</div>
 
-		<!-- Shortcuts: no boxes, just layered text -->
 		<div class="hints">
 			<span class="hint"><i>T</i> terminal</span>
 			<span class="hint"><i>N</i> note</span>
-			<span class="hint"><i>⌘Z</i> undo</span>
+			<span class="hint"><i>B</i> sidebar</span>
 		</div>
 	</div>
 </aside>
 
-<!-- Modal -->
-{#if showCreateModal}
-	<div
-		class="backdrop"
-		role="dialog"
-		aria-modal="true"
-		tabindex="-1"
-		onclick={(e) => { if (e.target === e.currentTarget) showCreateModal = false; }}
-		onkeydown={(e) => e.key === 'Escape' && (showCreateModal = false)}
-	>
-		<div
-			class="modal"
-			role="presentation"
-			onclick={(e) => e.stopPropagation()}
-			onkeydown={(e) => e.key === 'Enter' && createSession()}
-		>
-			<!-- Type toggle -->
-			<div class="modal-toggle">
-				<button class="toggle-opt" class:active={createType === 'tmux'} onclick={() => createType = 'tmux'}>tmux</button>
-				<button class="toggle-opt" class:active={createType === 'pty'}  onclick={() => createType = 'pty'}>local</button>
-				<button class="toggle-opt" class:active={createType === 'ssh'}  onclick={() => createType = 'ssh'}>ssh</button>
-			</div>
-
-			<div class="modal-body">
-				<p class="modal-desc">
-					{#if createType === 'tmux'}
-						Persistent multiplexed session via tmux — survives reconnects
-					{:else if createType === 'pty'}
-						Direct shell process using your system's default shell
-					{:else}
-						Connect to a remote machine over SSH
-					{/if}
-				</p>
-
-				{#if createType === 'ssh'}
-					<label class="field">
-						<span class="field-label">Host</span>
-						<input class="field-input" type="text" bind:value={sshHost} placeholder="192.168.1.10" use:focusOnMount />
-					</label>
-					<div class="field-row">
-						<label class="field field-grow">
-							<span class="field-label">User</span>
-							<input class="field-input" type="text" bind:value={sshUser} placeholder="ubuntu" />
-						</label>
-						<label class="field field-port">
-							<span class="field-label">Port</span>
-							<input class="field-input" type="number" bind:value={sshPort} min="1" max="65535" placeholder="22" />
-						</label>
-					</div>
-				{:else}
-					<label class="field">
-						<span class="field-label">Name</span>
-						<input class="field-input" type="text" bind:value={createName} placeholder="dev-1" use:focusOnMount />
-					</label>
-				{/if}
-			</div>
-
-			<div class="modal-foot">
-				<button class="btn-ghost" onclick={() => showCreateModal = false}>Cancel</button>
-				<button
-					class="btn-primary"
-					onclick={createSession}
-					disabled={!isCreateReady()}
-				>{creating ? 'Connecting…' : 'Create'}</button>
-			</div>
-		</div>
-	</div>
-{/if}
+<CreateWorkspaceModal
+	open={showCreateModal}
+	onclose={() => (showCreateModal = false)}
+	oncreated={handleCreated}
+/>
 
 <style>
-	/* ─── Sidebar shell ───────────────────────────────── */
 	.sidebar {
-		width: 228px;
-		min-width: 228px;
+		width: 100%;
+		min-width: 0;
 		height: 100%;
-		background: var(--surface);
-		border-right: 1px solid var(--border);
 		display: flex;
 		flex-direction: column;
-		overflow: hidden;
+		gap: 10px;
+		background: transparent;
 	}
 
-	/* ─── Section header ──────────────────────────────── */
-	.section-head {
+	.sidebar-top,
+	.list-area,
+	.sidebar-foot {
+		border: 1px solid var(--float-border);
+		background:
+			linear-gradient(180deg, var(--float-highlight), transparent 62%),
+			var(--float-surface);
+		box-shadow: var(--float-shadow);
+		backdrop-filter: var(--float-blur);
+		-webkit-backdrop-filter: var(--float-blur);
+	}
+
+	.sidebar-top,
+	.sidebar-foot {
+		padding: 14px 12px 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+		border-radius: 28px;
+	}
+
+	.sidebar-top {
+		flex-shrink: 0;
+	}
+
+	.title-row {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
-		padding: 0 14px;
-		height: 44px;
-		flex-shrink: 0;
-		border-bottom: 1px solid var(--border);
+		gap: 8px;
 	}
 
-	.section-left {
+	.title-group {
 		display: flex;
 		align-items: center;
-		gap: 7px;
+		gap: 8px;
+		min-width: 0;
 	}
 
 	.section-title {
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 11px;
 		font-weight: 600;
-		color: var(--muted);
-		letter-spacing: 0.04em;
+		color: rgba(218, 224, 237, 0.76);
+		letter-spacing: 0.03em;
 	}
 
 	.count {
 		font-family: var(--font-family-mono, monospace);
 		font-size: 10px;
-		color: var(--border);
+		color: #9aa3b9;
 		font-variant-numeric: tabular-nums;
-		background: var(--surface2);
-		padding: 1px 6px;
-		border-radius: 10px;
-		border: 1px solid var(--border);
+		background: rgba(255, 255, 255, 0.045);
+		padding: 2px 7px;
+		border-radius: 999px;
+		border: 1px solid rgba(118, 127, 150, 0.14);
 		line-height: 1.5;
 	}
 
-	.section-actions {
-		display: flex;
-		align-items: center;
-		gap: 2px;
-	}
-
-	.action-sep {
-		font-size: 10px;
-		color: var(--border);
-		user-select: none;
-		padding: 0 1px;
-	}
-
 	.action-btn {
-		background: transparent;
-		border: none;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 10px;
-		color: #4a4a60;
-		cursor: pointer;
-		padding: 3px 6px;
-		border-radius: 4px;
-		transition: color 0.12s ease, background 0.12s ease;
-		letter-spacing: 0.02em;
-	}
-	.action-btn:hover {
-		color: var(--accent-hover);
-		background: rgba(124, 92, 252, 0.08);
-	}
-	.action-btn--pty:hover {
-		color: #3dd68c;
-		background: rgba(61, 214, 140, 0.08);
-	}
-	.action-btn--ssh:hover {
-		color: #38bdf8;
-		background: rgba(56, 189, 248, 0.08);
-	}
-
-	/* ─── Session list ────────────────────────────────── */
-	.list-area {
-		flex: 1;
-		overflow-y: auto;
-		padding: 6px;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-
-	/* Skeleton */
-	.skeleton {
-		height: 34px;
-		background: var(--surface2);
-		border-radius: 5px;
-		animation: pulse-dot 1.6s ease-in-out infinite;
-	}
-
-	/* Empty */
-	.empty {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
+		width: 28px;
+		height: 28px;
+		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		gap: 8px;
-		padding: 40px 0;
-		color: var(--border);
-	}
-	.empty span {
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 11px;
-		color: #3a3a50;
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.045);
+		color: #8d95aa;
+		cursor: pointer;
+		transition:
+			border-color 0.12s ease,
+			color 0.12s ease,
+			background 0.12s ease,
+			transform 0.12s ease;
 	}
 
-	/* ─── Footer ──────────────────────────────────────── */
-	.sidebar-foot {
-		border-top: 1px solid var(--border);
-		padding: 9px 14px 11px;
+	.action-btn:hover {
+		color: #f5f7fc;
+		border-color: rgba(142, 152, 176, 0.22);
+		background: rgba(255, 255, 255, 0.07);
+		transform: translateY(-1px);
+	}
+
+	.filter {
+		position: relative;
+		display: block;
+	}
+
+	.filter-icon {
+		position: absolute;
+		top: 50%;
+		left: 10px;
+		transform: translateY(-50%);
+		color: #4a4a60;
+		pointer-events: none;
+	}
+
+	.filter-input {
+		width: 100%;
+		box-sizing: border-box;
+		height: 36px;
+		padding: 0 12px 0 30px;
+		border-radius: 999px;
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		background: rgba(255, 255, 255, 0.04);
+		color: #f4f7ff;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		outline: none;
+		transition:
+			border-color 0.12s ease,
+			box-shadow 0.12s ease,
+			background 0.12s ease;
+	}
+
+	.filter-input::placeholder {
+		color: #667087;
+	}
+
+	.filter-input:focus {
+		border-color: rgba(124, 92, 252, 0.32);
+		background: rgba(255, 255, 255, 0.045);
+		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.12);
+	}
+
+	.list-area {
+		flex: 1;
+		min-height: 0;
+		overflow-y: auto;
+		padding: 10px;
 		display: flex;
 		flex-direction: column;
-		gap: 7px;
+		gap: 8px;
+		border-radius: 32px;
 	}
 
-	/* Note + stepper in one row */
-	.foot-main {
+	.workspace-stack {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+	}
+
+	.workspace-item {
+		width: 100%;
+		padding: 11px 12px;
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		border: 1px solid rgba(255, 255, 255, 0.03);
+		border-radius: 20px;
+		background: rgba(255, 255, 255, 0.028);
+		box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+		cursor: pointer;
+		text-align: left;
+		transition:
+			background 0.12s ease,
+			border-color 0.12s ease,
+			transform 0.12s ease,
+			box-shadow 0.12s ease;
+	}
+
+	.workspace-item:hover {
+		background: rgba(255, 255, 255, 0.055);
+		border-color: rgba(142, 152, 176, 0.14);
+		box-shadow:
+			0 10px 24px rgba(0, 0, 0, 0.14),
+			inset 0 1px 0 rgba(255, 255, 255, 0.04);
+		transform: translateY(-1px);
+	}
+
+	.workspace-item.active {
+		background:
+			linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 72%),
+			linear-gradient(180deg, rgba(124, 92, 252, 0.12), rgba(255, 255, 255, 0.045));
+		border-color: rgba(124, 92, 252, 0.24);
+		box-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.05),
+			0 12px 28px rgba(0, 0, 0, 0.18);
+	}
+
+	.workspace-avatar {
+		width: 28px;
+		height: 28px;
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 11px;
+		color: var(--avatar-dot);
+		background:
+			linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent 75%),
+			var(--avatar-bar);
+		border: 1px solid color-mix(in srgb, var(--avatar-border) 72%, rgba(255, 255, 255, 0.08));
+		box-shadow:
+			inset 0 1px 0 rgba(255, 255, 255, 0.04),
+			0 8px 18px rgba(0, 0, 0, 0.16);
+	}
+
+	.workspace-copy {
+		min-width: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		flex: 1;
+	}
+
+	.workspace-name {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 12px;
+		font-weight: 600;
+		color: #edf1fb;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.workspace-meta {
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		color: #80879a;
+	}
+
+	.workspace-badge {
+		flex-shrink: 0;
+		min-width: 20px;
+		height: 18px;
+		padding: 0 6px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.05);
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		font-family: var(--font-family-mono, monospace);
+		font-size: 10px;
+		color: #bac1d2;
+		font-variant-numeric: tabular-nums;
+	}
+
+	.workspace-menu {
+		padding: 12px;
+		display: flex;
+		flex-direction: column;
+		gap: 10px;
+		border-radius: 20px;
+		border: 1px solid rgba(118, 127, 150, 0.16);
+		background:
+			linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 52%),
+			rgba(21, 22, 28, 0.92);
+		box-shadow:
+			0 16px 34px rgba(0, 0, 0, 0.18),
+			inset 0 1px 0 rgba(255, 255, 255, 0.035);
+		backdrop-filter: blur(14px);
+		-webkit-backdrop-filter: blur(14px);
+	}
+
+	.workspace-menu-header,
+	.workspace-menu-head,
+	.workspace-menu-actions {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
+		gap: 8px;
 	}
 
-	.foot-note {
+	.workspace-menu-copy,
+	.workspace-menu-confirm {
 		display: flex;
-		align-items: center;
-		gap: 6px;
-		background: transparent;
-		border: none;
-		color: #3a3a50;
+		flex-direction: column;
+		gap: 5px;
+	}
+
+	.workspace-menu-title {
+		font-family: var(--font-family-mono, monospace);
+		font-size: 12px;
+		font-weight: 600;
+		color: #f0f4ff;
+	}
+
+	.workspace-menu-meta,
+	.workspace-menu-value,
+	.workspace-menu-confirm-copy {
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 11px;
-		font-weight: 500;
-		cursor: pointer;
-		padding: 0;
-		transition: color 0.12s ease;
-	}
-	.foot-note:hover {
-		color: var(--muted);
+		line-height: 1.45;
+		color: #96a0b5;
 	}
 
-	/* Stepper */
+	.workspace-menu-status {
+		padding: 3px 7px;
+		border-radius: 999px;
+		border: 1px solid rgba(118, 127, 150, 0.16);
+		background: rgba(255, 255, 255, 0.04);
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 10px;
+		font-weight: 600;
+		color: #f6d58c;
+	}
+
+	.workspace-menu-error {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		line-height: 1.4;
+		color: #ff8ea0;
+	}
+
+	.workspace-menu-block {
+		display: flex;
+		flex-direction: column;
+		gap: 8px;
+		padding: 10px;
+		border-radius: 15px;
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		background: rgba(255, 255, 255, 0.025);
+	}
+
+	.workspace-menu-label {
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 10px;
+		font-weight: 700;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: rgba(205, 210, 222, 0.52);
+	}
+
+	.workspace-menu-icons,
+	.workspace-menu-colors {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 8px;
+	}
+
+	.workspace-menu-icon,
+	.workspace-menu-swatch {
+		width: 28px;
+		height: 28px;
+		padding: 0;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 10px;
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		background: rgba(255, 255, 255, 0.02);
+		color: #8892a5;
+		cursor: pointer;
+		transition:
+			background 0.12s ease,
+			border-color 0.12s ease,
+			color 0.12s ease,
+			transform 0.12s ease;
+	}
+
+	.workspace-menu-icon:hover,
+	.workspace-menu-swatch:hover,
+	.workspace-menu-btn:hover:not(:disabled),
+	.workspace-menu-danger:hover {
+		transform: translateY(-1px);
+	}
+
+	.workspace-menu-icon.active {
+		color: #fff;
+		border-color: rgba(124, 92, 252, 0.3);
+		background: rgba(124, 92, 252, 0.12);
+	}
+
+	.workspace-menu-swatch {
+		border-radius: 999px;
+		border: none;
+		background: transparent;
+	}
+
+	.workspace-menu-swatch-dot {
+		width: 22px;
+		height: 22px;
+		border-radius: 999px;
+		background: var(--swatch);
+		box-shadow:
+			0 0 0 2px rgba(10, 12, 18, 0.9),
+			0 0 0 4px transparent;
+	}
+
+	.workspace-menu-swatch.active .workspace-menu-swatch-dot {
+		box-shadow:
+			0 0 0 2px rgba(10, 12, 18, 0.9),
+			0 0 0 4px var(--ring);
+	}
+
+	.workspace-menu-footer {
+		padding-top: 2px;
+	}
+
+	.workspace-menu-btn,
+	.workspace-menu-danger {
+		height: 32px;
+		padding: 0 12px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 999px;
+		border: 1px solid rgba(118, 127, 150, 0.16);
+		background: rgba(255, 255, 255, 0.04);
+		color: #dce2f0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		font-weight: 600;
+		cursor: pointer;
+		transition:
+			background 0.12s ease,
+			border-color 0.12s ease,
+			color 0.12s ease,
+			transform 0.12s ease;
+	}
+
+	.workspace-menu-danger {
+		width: 100%;
+		border-color: rgba(255, 122, 140, 0.16);
+		background: rgba(255, 107, 128, 0.08);
+		color: #ffacb8;
+	}
+
+	.workspace-menu-btn:hover:not(:disabled) {
+		background: rgba(255, 255, 255, 0.07);
+		border-color: rgba(142, 152, 176, 0.22);
+	}
+
+	.workspace-menu-danger:hover {
+		background: rgba(255, 107, 128, 0.12);
+		border-color: rgba(255, 122, 140, 0.24);
+	}
+
+	.workspace-menu-btn:disabled,
+	.workspace-menu-danger:disabled {
+		opacity: 0.48;
+		cursor: default;
+	}
+
+	.workspace-menu-btn--danger {
+		border-color: rgba(255, 122, 140, 0.2);
+		background: rgba(255, 107, 128, 0.12);
+		color: #ffb5c1;
+	}
+
+	.workspace-menu-btn--danger:hover:not(:disabled) {
+		background: rgba(255, 107, 128, 0.18);
+		border-color: rgba(255, 122, 140, 0.28);
+		color: #ffdce2;
+	}
+
+	.skeleton {
+		height: 48px;
+		background: rgba(255, 255, 255, 0.05);
+		border-radius: 20px;
+		animation: pulse-dot 1.6s ease-in-out infinite;
+	}
+
+	.empty {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 24px 12px;
+		text-align: center;
+	}
+
+	.empty span {
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 12px;
+		color: #7c8396;
+	}
+
+	.sidebar-foot {
+		flex-shrink: 0;
+		gap: 12px;
+	}
+
+	.foot-error {
+		margin: 0;
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		line-height: 1.5;
+		color: #ff6b80;
+	}
+
+	.stepper-row {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		padding: 2px 2px 2px 2px;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.03);
+	}
+
+	.stepper-label {
+		font-family: 'Inter', system-ui, sans-serif;
+		font-size: 11px;
+		color: #8b92a5;
+	}
+
 	.stepper {
 		display: flex;
 		align-items: center;
-		border: 1px solid var(--border);
-		border-radius: 5px;
+		border: 1px solid rgba(118, 127, 150, 0.14);
+		border-radius: 999px;
 		overflow: hidden;
-		background: var(--surface2);
+		background: rgba(255, 255, 255, 0.035);
 	}
 
 	.stepper-btn {
-		width: 22px;
-		height: 20px;
+		width: 26px;
+		height: 24px;
 		background: transparent;
 		border: none;
-		color: #4a4a60;
+		color: #7d8496;
 		font-size: 12px;
 		cursor: pointer;
 		display: flex;
@@ -425,43 +978,49 @@
 		font-family: var(--font-family-mono, monospace);
 		transition: background 0.1s ease, color 0.1s ease;
 	}
+
 	.stepper-btn:hover:not(:disabled) {
-		background: var(--border);
-		color: var(--text);
+		background: rgba(255, 255, 255, 0.06);
+		color: #f3f6fd;
 	}
+
 	.stepper-btn:disabled {
 		opacity: 0.2;
 		cursor: default;
 	}
 
 	.stepper-val {
-		width: 26px;
-		height: 20px;
+		width: 30px;
+		height: 24px;
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		font-family: var(--font-family-mono, monospace);
 		font-size: 10px;
-		color: #4a4a60;
-		border-left: 1px solid var(--border);
-		border-right: 1px solid var(--border);
+		color: #adb5c6;
+		border-left: 1px solid rgba(118, 127, 150, 0.16);
+		border-right: 1px solid rgba(118, 127, 150, 0.16);
 		font-variant-numeric: tabular-nums;
 	}
 
-	/* Hints — no boxes, two-tone text */
 	.hints {
 		display: flex;
 		align-items: center;
-		gap: 12px;
+		gap: 8px;
+		flex-wrap: wrap;
 	}
 
 	.hint {
-		display: flex;
+		display: inline-flex;
 		align-items: baseline;
-		gap: 3px;
+		gap: 4px;
+		padding: 5px 9px;
+		border-radius: 999px;
+		background: rgba(255, 255, 255, 0.035);
+		border: 1px solid rgba(118, 127, 150, 0.12);
 		font-family: 'Inter', system-ui, sans-serif;
 		font-size: 10px;
-		color: #2e2e3e;
+		color: #6b7283;
 	}
 
 	.hint i {
@@ -469,175 +1028,7 @@
 		font-family: var(--font-family-mono, monospace);
 		font-size: 9px;
 		font-weight: 600;
-		color: #3e3e52;
+		color: #8a91a3;
 		letter-spacing: 0.02em;
-	}
-
-	/* ─── Modal ───────────────────────────────────────── */
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.6);
-		backdrop-filter: blur(4px);
-		z-index: 1000;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.modal {
-		background: var(--surface);
-		border: 1px solid var(--border);
-		border-radius: 12px;
-		width: 340px;
-		overflow: hidden;
-		box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255,255,255,0.04);
-	}
-
-	/* Type toggle */
-	.modal-toggle {
-		display: flex;
-		border-bottom: 1px solid var(--border);
-	}
-
-	.toggle-opt {
-		flex: 1;
-		padding: 12px 0;
-		background: transparent;
-		border: none;
-		font-family: var(--font-family-mono, monospace);
-		font-size: 12px;
-		color: var(--muted);
-		cursor: pointer;
-		transition: color 0.12s ease, background 0.12s ease;
-		position: relative;
-	}
-	.toggle-opt:hover {
-		color: var(--text);
-		background: var(--surface2);
-	}
-	.toggle-opt.active {
-		color: var(--text);
-		background: var(--surface2);
-	}
-	.toggle-opt.active::after {
-		content: '';
-		position: absolute;
-		bottom: 0;
-		left: 16px;
-		right: 16px;
-		height: 2px;
-		background: var(--accent);
-		border-radius: 2px 2px 0 0;
-	}
-	.toggle-opt:not(:last-child) {
-		border-right: 1px solid var(--border);
-	}
-
-	.modal-body {
-		padding: 20px 20px 16px;
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-	}
-
-	.modal-desc {
-		margin: 0 0 16px;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		color: var(--muted);
-		line-height: 1.6;
-	}
-
-	/* Field */
-	.field {
-		display: block;
-	}
-
-	.field-row {
-		display: flex;
-		gap: 10px;
-		margin-top: 12px;
-	}
-
-	.field-grow { flex: 1; }
-
-	.field-port { width: 80px; min-width: 80px; }
-
-	.field-label {
-		display: block;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 10px;
-		font-weight: 600;
-		color: #4a4a60;
-		text-transform: uppercase;
-		letter-spacing: 0.08em;
-		margin-bottom: 6px;
-	}
-
-	.field-input {
-		width: 100%;
-		padding: 9px 12px;
-		background: var(--surface2);
-		border: 1px solid var(--border);
-		border-radius: 7px;
-		color: var(--text);
-		font-family: var(--font-family-mono, monospace);
-		font-size: 13px;
-		outline: none;
-		box-sizing: border-box;
-		transition: border-color 0.15s ease, box-shadow 0.15s ease;
-	}
-	.field-input:focus {
-		border-color: var(--accent);
-		box-shadow: 0 0 0 3px rgba(124, 92, 252, 0.12);
-	}
-
-	/* Modal footer */
-	.modal-foot {
-		display: flex;
-		align-items: center;
-		justify-content: flex-end;
-		gap: 8px;
-		padding: 12px 20px;
-		border-top: 1px solid var(--border);
-		background: var(--surface2);
-	}
-
-	.btn-ghost {
-		padding: 7px 16px;
-		background: transparent;
-		border: 1px solid var(--border);
-		border-radius: 6px;
-		color: var(--muted);
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: border-color 0.12s, color 0.12s;
-	}
-	.btn-ghost:hover {
-		border-color: var(--muted);
-		color: var(--text);
-	}
-
-	.btn-primary {
-		padding: 7px 16px;
-		background: var(--accent);
-		border: 1px solid transparent;
-		border-radius: 6px;
-		color: #fff;
-		font-family: 'Inter', system-ui, sans-serif;
-		font-size: 12px;
-		font-weight: 500;
-		cursor: pointer;
-		transition: background 0.12s ease;
-	}
-	.btn-primary:hover:not(:disabled) {
-		background: var(--accent-hover);
-	}
-	.btn-primary:disabled {
-		opacity: 0.4;
-		cursor: default;
 	}
 </style>

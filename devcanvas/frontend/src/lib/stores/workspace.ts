@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import type { WorkspaceSettings } from '$lib/terminal/settings';
 
 export type Workspace = {
 	id: string;
@@ -6,6 +7,7 @@ export type Workspace = {
 	createdAt: string;
 	updatedAt?: string;
 	sessionCount?: number;
+	settings?: WorkspaceSettings;
 };
 
 export const currentWorkspace = writable<Workspace | null>(null);

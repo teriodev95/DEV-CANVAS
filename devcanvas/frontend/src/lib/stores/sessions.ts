@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store';
+import type { TerminalSessionAppearance } from '$lib/terminal/settings';
 
 export type Session = {
 	id: string;
@@ -7,6 +8,9 @@ export type Session = {
 	status: 'active' | 'idle' | 'dead';
 	workspaceId: string;
 	createdAt: string;
+	lastActivity?: string;
+	workingDir?: string | null;
+	appearance?: TerminalSessionAppearance;
 };
 
 export const sessions = writable<Session[]>([]);

@@ -2,8 +2,11 @@ import { randomUUID } from 'crypto'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { getDefaultWorkingDirectory, resolveWorkingDirectory } from './working-dir'
 
 const FIFO_DIR = path.join(os.tmpdir(), 'devcanvas-fifos')
+const INTERNAL_SESSION_NAMES = new Set(['__dc_ctrl'])
+const USER_HOME = os.homedir()
 
 // Ensure FIFO directory exists
 try {
@@ -17,12 +20,40 @@ try {
 // Env vars that indicate we're inside a Claude Code session.
 // Strip them so spawned shells/tmux sessions start clean.
 const CLAUDE_ENV_KEYS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS']
+let resolvedUserPath: string | undefined
+
+function getDefaultShell(): string {
+  return process.env.SHELL || (process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash')
+}
+
+function getUserLoginPath(): string {
+  if (resolvedUserPath !== undefined) return resolvedUserPath
+
+  try {
+    const shell = getDefaultShell()
+    const result = Bun.spawnSync([shell, '-l', '-c', 'echo $PATH'], {
+      stdout: 'pipe',
+      stderr: 'ignore',
+      cwd: USER_HOME,
+    })
+    const nextPath = result.stdout.toString().trim()
+    if (nextPath && nextPath.includes('/')) {
+      resolvedUserPath = nextPath
+      return nextPath
+    }
+  } catch {}
+
+  resolvedUserPath = process.env.PATH ?? '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin'
+  return resolvedUserPath
+}
 
 export function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && !CLAUDE_ENV_KEYS.includes(k)) env[k] = v
   }
+  env.PATH = getUserLoginPath()
+  env.HOME = USER_HOME
   return env
 }
 
@@ -60,11 +91,13 @@ async function run(
  * Create a new detached tmux session.
  * Returns the session name (same as input — tmux uses names as identifiers).
  */
-export async function createSession(name: string): Promise<string> {
+export async function createSession(name: string, workingDir?: string | null): Promise<string> {
+  const launchDir = resolveWorkingDirectory(workingDir ?? getDefaultWorkingDirectory())
   const { exitCode, stderr } = await run('tmux', [
     'new-session',
     '-d',
     '-s', name,
+    '-c', launchDir,
     '-x', '220',
     '-y', '50',
     '/bin/bash',     // always plain bash — never inherit $SHELL from backend env
@@ -75,6 +108,11 @@ export async function createSession(name: string): Promise<string> {
   }
 
   return name
+}
+
+export async function hasSession(name: string): Promise<boolean> {
+  const { exitCode } = await run('tmux', ['has-session', '-t', name], { ignoreError: true })
+  return exitCode === 0
 }
 
 /**
@@ -88,7 +126,10 @@ export async function listSessions(): Promise<string[]> {
   )
 
   if (exitCode !== 0 || !stdout) return []
-  return stdout.split('\n').filter(Boolean)
+  return stdout
+    .split('\n')
+    .filter(Boolean)
+    .filter((name) => !INTERNAL_SESSION_NAMES.has(name))
 }
 
 /**
@@ -136,6 +177,32 @@ export async function resizeSession(name: string, cols: number, rows: number): P
 }
 
 /**
+ * Capture the current visible screen of a tmux pane/session, preserving
+ * formatting escapes where possible so the frontend can resync after reconnect.
+ */
+export async function capturePane(name: string): Promise<string> {
+  const { stdout, exitCode } = await run(
+    'tmux',
+    ['capture-pane', '-p', '-e', '-t', name],
+    { ignoreError: true }
+  )
+
+  if (exitCode !== 0) return ''
+  return stdout
+}
+
+export async function getSessionWorkingDirectory(name: string): Promise<string | null> {
+  const { stdout, exitCode } = await run(
+    'tmux',
+    ['display-message', '-p', '-t', name, '#{pane_current_path}'],
+    { ignoreError: true }
+  )
+
+  if (exitCode !== 0 || !stdout) return null
+  return resolveWorkingDirectory(stdout)
+}
+
+/**
  * Kill a tmux session.
  */
 export async function killSession(name: string): Promise<void> {
@@ -154,7 +221,8 @@ export async function killSession(name: string): Promise<void> {
 export function startStreaming(
   sessionId: string,
   sessionName: string,
-  onData: (chunk: string) => void
+  onData: (chunk: string) => void,
+  onWorkingDirChange?: (workingDir: string) => void
 ): () => void {
   const fifoPath = path.join(FIFO_DIR, `${sessionId}.fifo`)
   let stopped = false
@@ -165,7 +233,8 @@ export function startStreaming(
 
   let fd: number | null = null
   let intervalId: ReturnType<typeof setInterval> | null = null
-  let tmuxPipeProc: ReturnType<typeof Bun.spawn> | null = null
+  let cwdIntervalId: ReturnType<typeof setInterval> | null = null
+  let lastWorkingDir = ''
 
   function cleanup() {
     if (cleanedUp) return
@@ -175,6 +244,10 @@ export function startStreaming(
     if (intervalId !== null) {
       clearInterval(intervalId)
       intervalId = null
+    }
+    if (cwdIntervalId !== null) {
+      clearInterval(cwdIntervalId)
+      cwdIntervalId = null
     }
 
     // Stop tmux pipe-pane
@@ -191,6 +264,23 @@ export function startStreaming(
   // Run setup asynchronously so we don't block the caller
   ;(async () => {
     try {
+      const syncWorkingDir = async () => {
+        if (!onWorkingDirChange || stopped) return
+        const nextWorkingDir = await getSessionWorkingDirectory(sessionName)
+        if (!nextWorkingDir || nextWorkingDir === lastWorkingDir) return
+        lastWorkingDir = nextWorkingDir
+        onWorkingDirChange(nextWorkingDir)
+      }
+
+      void syncWorkingDir()
+      cwdIntervalId = setInterval(() => {
+        void syncWorkingDir()
+      }, 2500)
+
+      // Clear any stale pipe-pane left behind by a previous app process.
+      // tmux keeps pipe-pane attached even if our old FIFO consumer died.
+      await run('tmux', ['pipe-pane', '-t', sessionName], { ignoreError: true })
+
       // Create FIFO
       const mkfifo = await run('mkfifo', [fifoPath], { ignoreError: true })
       if (mkfifo.exitCode !== 0) {
@@ -200,11 +290,11 @@ export function startStreaming(
 
       if (stopped) return
 
-      // Attach tmux pipe-pane to write output to FIFO
-      // `-o` means only capture output (pane output, not input echo)
+      // Attach tmux pipe-pane to write output to FIFO.
+      // `-O` connects pane output to the shell command stdin.
       const pipe = await run(
         'tmux',
-        ['pipe-pane', '-t', sessionName, '-o', `cat >> ${fifoPath}`],
+        ['pipe-pane', '-t', sessionName, '-O', `cat >> ${fifoPath}`],
         { ignoreError: true }
       )
 

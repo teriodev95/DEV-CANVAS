@@ -4,8 +4,11 @@ import {
   getSessions,
   getSessionById,
   insertSession,
+  hasSessionOutput,
+  clearSessionOutput,
   updateSessionActivity,
   updateSessionStatus,
+  updateSessionWorkingDir,
   insertSessionOutput,
   getNextSequence,
   getSessionOutput,
@@ -14,6 +17,7 @@ import * as tmuxService from '../services/tmux'
 import { tmuxControl } from '../services/tmux-control'
 import { spawnPty, spawnSsh, killPty } from '../services/pty'
 import type { WSMessage, SessionInfo } from './protocol'
+import { getDefaultWorkingDirectory, resolveWorkingDirectory } from '../services/working-dir'
 
 // ---------------------------------------------------------------------------
 // State
@@ -75,6 +79,16 @@ function errorMsg(id: string | undefined, code: string, message: string) {
   return { type: 'error', id, code, message }
 }
 
+function syncSessionWorkingDir(sessionId: string, workingDir: string, touchActivity = true) {
+  const now = Date.now()
+  updateSessionWorkingDir(sessionId, workingDir, touchActivity ? now : undefined)
+  broadcastToSession(sessionId, {
+    type: 'session:cwd',
+    sessionId,
+    workingDir,
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Stream management
 // ---------------------------------------------------------------------------
@@ -84,29 +98,42 @@ function ensureStream(sessionId: string, sessionName: string) {
 
   let sequence = getNextSequence(sessionId)
 
-  const cleanup = tmuxService.startStreaming(sessionId, sessionName, (chunk: string) => {
-    const now = Date.now()
-    const seq = sequence++
+  const cleanup = tmuxService.startStreaming(
+    sessionId,
+    sessionName,
+    (chunk: string) => {
+      const now = Date.now()
+      const seq = sequence++
 
-    // Broadcast first — don't block on DB write
-    broadcastToSession(sessionId, {
-      type: 'terminal:output',
-      sessionId,
-      data: chunk,
-      sequence: seq,
-      timestamp: now,
-    })
+      // Broadcast first — don't block on DB write
+      broadcastToSession(sessionId, {
+        type: 'terminal:output',
+        sessionId,
+        data: chunk,
+        sequence: seq,
+        timestamp: now,
+      })
 
-    // Persist async
-    queueMicrotask(() => {
-      try {
-        insertSessionOutput(sessionId, seq, chunk, now)
-        updateSessionActivity(sessionId, now)
-      } catch (err) {
-        console.error(`[ws] DB write error for session ${sessionId}:`, err)
-      }
-    })
-  })
+      // Persist async
+      queueMicrotask(() => {
+        try {
+          insertSessionOutput(sessionId, seq, chunk, now)
+          updateSessionActivity(sessionId, now)
+        } catch (err) {
+          console.error(`[ws] DB write error for session ${sessionId}:`, err)
+        }
+      })
+    },
+    (workingDir) => {
+      queueMicrotask(() => {
+        try {
+          syncSessionWorkingDir(sessionId, workingDir)
+        } catch (err) {
+          console.error(`[ws] Failed to persist tmux working dir for ${sessionId}:`, err)
+        }
+      })
+    }
+  )
 
   sessionStreams.set(sessionId, cleanup)
 }
@@ -125,6 +152,7 @@ function stopStream(sessionId: string) {
 
 async function handleSessionCreate(ws: ServerWebSocket<WsData>, msg: Extract<WSMessage, { type: 'session:create' }>) {
   const { id, name, workspaceId, sessionType = 'tmux' } = msg
+  const launchWorkingDir = getDefaultWorkingDirectory()
 
   // Validate workspace exists
   const workspace = getDb().query('SELECT id FROM workspaces WHERE id = ?').get(workspaceId)
@@ -138,7 +166,7 @@ async function handleSessionCreate(ws: ServerWebSocket<WsData>, msg: Extract<WSM
 
   try {
     if (sessionType === 'tmux') {
-      await tmuxService.createSession(name)
+      await tmuxService.createSession(name, launchWorkingDir)
     } else {
       // PTY sessions are spawned on first subscribe
     }
@@ -151,6 +179,7 @@ async function handleSessionCreate(ws: ServerWebSocket<WsData>, msg: Extract<WSM
       status: 'active',
       created_at: now,
       last_activity: now,
+      working_dir: sessionType === 'ssh' ? null : launchWorkingDir,
     })
 
     sendToClient(ws, {
@@ -189,27 +218,51 @@ async function handleSessionSubscribe(
     sessionCache.set(sessionId, { type: session.type as 'tmux' | 'pty' | 'ssh', name: session.name })
   }
 
-  // Replay buffered output from DB
-  if (fromSequence >= 0) {
-    const rows = getSessionOutput(sessionId, fromSequence)
-    for (const row of rows) {
-      sendToClient(ws, {
-        type: 'terminal:output',
-        sessionId,
-        data: row.data,
-        sequence: row.sequence,
-        timestamp: row.timestamp,
-      })
-    }
-  }
+  let skipBufferedReplay = false
+  let restartNotice: string | null = null
+  let tmuxResyncScreen = ''
+  const hadStream = session.type === 'tmux' ? sessionStreams.has(sessionId) : false
 
   // Start streaming if not already active
   if (session.type === 'tmux') {
+    const tmuxExists = await tmuxService.hasSession(session.name)
+    if (!tmuxExists) {
+      const launchWorkingDir = resolveWorkingDirectory(session.working_dir ?? getDefaultWorkingDirectory())
+      clearSessionOutput(sessionId)
+      skipBufferedReplay = true
+      restartNotice =
+        '\x1bc\x1b[33m[devcanvas] Esta sesion tmux se reinicio porque la original ya no existia.\x1b[0m\r\n' +
+        `\x1b[90m[devcanvas] Se abrio de nuevo en ${launchWorkingDir}.\x1b[0m\r\n\r\n`
+
+      await tmuxService.createSession(session.name, launchWorkingDir)
+      updateSessionStatus(sessionId, 'active', Date.now())
+      syncSessionWorkingDir(sessionId, launchWorkingDir)
+    } else {
+      const liveWorkingDir = await tmuxService.getSessionWorkingDirectory(session.name)
+      if (liveWorkingDir) {
+        updateSessionStatus(sessionId, 'active', Date.now())
+        syncSessionWorkingDir(sessionId, liveWorkingDir)
+      }
+    }
+
     ensureStream(sessionId, session.name)
+    if (!hadStream) {
+      tmuxResyncScreen = await tmuxService.capturePane(session.name)
+    }
   } else if (session.type === 'pty' || session.type === 'ssh') {
     // Spawn PTY/SSH process if not already running
     const { getPty } = await import('../services/pty')
     if (!getPty(sessionId)) {
+      const isColdPtyRestore = session.type === 'pty' && hasSessionOutput(sessionId)
+      if (isColdPtyRestore) {
+        clearSessionOutput(sessionId)
+        skipBufferedReplay = true
+        const launchWorkingDir = resolveWorkingDirectory(session.working_dir ?? getDefaultWorkingDirectory())
+        restartNotice =
+          '\x1bc\x1b[33m[devcanvas] Esta sesion local se reinicio al relanzar la app.\x1b[0m\r\n' +
+          `\x1b[90m[devcanvas] El historial anterior no puede reanudarse con fidelidad en PTY; se abrio un shell nuevo en ${launchWorkingDir}.\x1b[0m\r\n\r\n`
+      }
+
       let sequence = getNextSequence(sessionId)
 
       const onChunk = (chunk: string) => {
@@ -233,20 +286,65 @@ async function handleSessionSubscribe(
       }
 
       if (session.type === 'ssh') {
-        // Parse SSH connection info from name: user@host:port
-        const match = session.name.match(/^(.+)@(.+):(\d+)$/)
-        if (match) {
-          const [, user, host, portStr] = match
-          const sshSession = spawnSsh(sessionId, host, user, parseInt(portStr, 10), 220, 50, onChunk)
+        if (session.ssh_host && session.ssh_user && (session.ssh_lookup || session.ssh_host)) {
+          const sshSession = spawnSsh(sessionId, {
+            lookup: session.ssh_lookup ?? session.ssh_host,
+            label: session.name,
+            host: session.ssh_host,
+            user: session.ssh_user,
+            port: session.ssh_port ?? 22,
+            identityFile: session.ssh_identity_file ?? null,
+            durable: Boolean(session.ssh_durable),
+            remoteSessionName: session.ssh_remote_session ?? null,
+          }, 220, 50, onChunk)
           ptyWriters.set(sessionId, sshSession.write.bind(sshSession))
         } else {
-          console.error(`[ws] SSH session name "${session.name}" does not match user@host:port`)
+          console.error(`[ws] SSH session "${session.name}" is missing connection metadata`)
         }
       } else {
-        spawnPtyAndTrack(sessionId, 220, 50, onChunk)
+        const launchWorkingDir = resolveWorkingDirectory(session.working_dir ?? getDefaultWorkingDirectory())
+        syncSessionWorkingDir(sessionId, launchWorkingDir)
+        spawnPtyAndTrack(sessionId, 220, 50, onChunk, launchWorkingDir)
       }
     }
   }
+
+  // Replay buffered output from DB unless this is a cold PTY restore.
+  if (!skipBufferedReplay && fromSequence >= 0) {
+    const rows = getSessionOutput(sessionId, fromSequence)
+    for (const row of rows) {
+      sendToClient(ws, {
+        type: 'terminal:output',
+        sessionId,
+        data: row.data,
+        sequence: row.sequence,
+        timestamp: row.timestamp,
+      })
+    }
+  }
+
+  if (tmuxResyncScreen) {
+    sendToClient(ws, {
+      type: 'terminal:output',
+      sessionId,
+      data: `\x1bc${tmuxResyncScreen}`,
+      sequence: getNextSequence(sessionId),
+      timestamp: Date.now(),
+    })
+  }
+
+  if (restartNotice) {
+    sendToClient(ws, {
+      type: 'terminal:output',
+      sessionId,
+      data: restartNotice,
+      sequence: 0,
+      timestamp: Date.now(),
+    })
+  }
+
+  // Notify frontend that the session is ready for input
+  sendToClient(ws, { type: 'session:ready', id, sessionId })
 }
 
 async function handleTerminalInput(
@@ -256,10 +354,16 @@ async function handleTerminalInput(
   const { id, sessionId, data } = msg
 
   // Use in-memory cache to avoid a DB query on every keystroke
-  const cached = sessionCache.get(sessionId)
+  let cached = sessionCache.get(sessionId)
   if (!cached) {
-    sendToClient(ws, errorMsg(id, 'SESSION_NOT_FOUND', `Session ${sessionId} not found`))
-    return
+    // Fallback: populate cache from DB (handles race with subscribe)
+    const session = getSessionById(sessionId)
+    if (!session) {
+      sendToClient(ws, errorMsg(id, 'SESSION_NOT_FOUND', `Session ${sessionId} not found`))
+      return
+    }
+    cached = { type: session.type as 'tmux' | 'pty' | 'ssh', name: session.name }
+    sessionCache.set(sessionId, cached)
   }
 
   try {
@@ -290,9 +394,21 @@ function spawnPtyAndTrack(
   sessionId: string,
   cols: number,
   rows: number,
-  onData: (chunk: string) => void
+  onData: (chunk: string) => void,
+  workingDir?: string | null
 ) {
-  const ptySession = spawnPty(sessionId, cols, rows, onData)
+  const ptySession = spawnPty(sessionId, cols, rows, onData, {
+    workingDir,
+    onWorkingDirChange: (nextWorkingDir) => {
+      queueMicrotask(() => {
+        try {
+          syncSessionWorkingDir(sessionId, nextWorkingDir)
+        } catch (err) {
+          console.error(`[ws] Failed to persist PTY working dir for ${sessionId}:`, err)
+        }
+      })
+    },
+  })
   ptyWriters.set(sessionId, ptySession.write.bind(ptySession))
   return ptySession
 }
@@ -316,7 +432,7 @@ async function handleTerminalResize(
       await tmuxService.resizeSession(session.name, cols, rows)
     } else {
       const { getPty } = await import('../services/pty')
-      // PTY resize is best-effort
+      getPty(sessionId)?.resize(cols, rows)
     }
   } catch (err: any) {
     console.error(`[ws] terminal:resize error:`, err)
@@ -337,6 +453,7 @@ async function handleSessionList(
     status: r.status,
     createdAt: r.created_at,
     lastActivity: r.last_activity,
+    workingDir: r.working_dir ?? null,
   }))
 
   sendToClient(ws, { type: 'session:list:response', id, sessions })
@@ -404,9 +521,10 @@ export const wsHandler = {
     // Remove from all session subscriber sets
     for (const [sessionId, subs] of sessionSubscribers.entries()) {
       subs.delete(clientId)
-      // If nobody is subscribed, stop the stream to save resources
+      // Keep tmux capture streams alive even when no UI is attached.
+      // Otherwise, switching workspaces drops all output produced while
+      // the user is away, and full-screen tools look frozen on return.
       if (subs.size === 0) {
-        stopStream(sessionId)
         sessionSubscribers.delete(sessionId)
       }
     }
